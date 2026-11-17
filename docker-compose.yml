@@ -150,6 +150,24 @@ services:
       - INFLUX_ORG=local-org
       - INFLUX_BUCKET=telemetry
 
+  # Counts the frames each gateway hands to the bridge (radio side), independent of ingest.
+  gateway-tap:
+    <<: *python
+    restart: unless-stopped
+    command: ["python", "-m", "gateway_tap.service"]
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+    environment:
+      - MQTT_HOST=mosquitto
+      - GATEWAY_TOPIC_PREFIX=eu868
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=local-dev-token
+      - INFLUX_ORG=local-org
+      - INFLUX_BUCKET=telemetry
+
   # One-shot tools: run with "docker compose run --rm <name>" (profile tools).
   provision:
     <<: *python

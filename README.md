@@ -70,8 +70,9 @@ Stop and delete all data with `docker compose down -v`.
 | `redis`, `postgres` | ChirpStack state. PostgreSQL also hosts the `telemetry` database. |
 | `provision/` | Idempotent gRPC script: gateway, application, device profile, the ABP devices. It pages its list calls and leaves a device alone when its ABP activation already matches (so frame counters are not reset). |
 | `ingest/` | Subscribes to the up events (QoS 1, persistent session, manual ack) and writes InfluxDB and the PostgreSQL tables. A worker thread retries with backoff, then parks the raw message in `failed_uplinks`. `python -m ingest.replay` reprocesses the parked rows. |
-| `influxdb` | Time series store (measurement `uplink`). |
-| `grafana/` | Provisioned datasources and the "Telemetry overview" dashboard. |
+| `gateway-tap` | Same image as `ingest`, its own entrypoint. Subscribes to `eu868/gateway/+/event/up` (radio side), counts frames per gateway from the topic alone (no payload decoding) and writes `gateway_frames` to InfluxDB every 2 s. |
+| `influxdb` | Time series store (measurements `uplink` and `gateway_frames`). |
+| `grafana/` | Provisioned datasources, the "Telemetry overview" dashboard and the alert rule "Radio OK, database stalled". |
 | `approve/` | Runs the SQL in `sql/approval/` and applies `config/thresholds.toml`. |
 | `telemetry/` | Pure logic, no network or database, unit tested (see below). |
 
@@ -118,6 +119,21 @@ requires) and `telemetry`. The schema is `sql/schema.sql`, loaded on the first s
 
 The policy is the pure function `telemetry/delivery.py` (unit tested).
 
+### Alert: radio OK, database stalled
+
+`grafana/provisioning/alerting/rules.yml` evaluates every 10 s over a 30 s window (short on purpose, so CI
+can see it fire and recover; use minutes in a real deployment): frames counted by `gateway-tap` in
+InfluxDB greater than 0 **and** no new row in PostgreSQL `uplinks`. It means the radio side is alive and
+the data side is not. No frames at all is not this alert (the rule stays OK). Check it with:
+
+```bash
+curl -s -u admin:admin http://localhost:3000/api/prometheus/grafana/api/v1/rules
+```
+
+Observed while the database refused writes (`ALTER TABLE uplinks ADD CONSTRAINT lab_reject CHECK (false) NOT VALID`):
+`inactive` at the start, `firing` about 6 s after the simulator began, `inactive` again once the frames
+stopped and left the 30 s window.
+
 ## Approval report
 
 ```bash
@@ -142,6 +158,7 @@ Follow the packet one hop at a time and stop at the first layer where it disappe
 | 3. MQTT, gateway topic | Raw uplink as published by the bridge | `docker compose exec mosquitto mosquitto_sub -t 'eu868/gateway/+/event/up' -v` |
 | 4. ChirpStack | MIC, DevAddr, session, region. Errors such as "gateway does not exist" or "invalid MIC" appear here | `docker compose logs chirpstack` |
 | 5. MQTT integration | Decoded event as JSON | `docker compose exec mosquitto mosquitto_sub -t 'application/+/device/+/event/up' -v` |
+| 5b. Radio side count | How many frames each gateway handed to the bridge (independent of ingest) | `curl -s -X POST 'http://localhost:8086/api/v2/query?org=local-org' -H 'Authorization: Token local-dev-token' -H 'Content-Type: application/vnd.flux' --data 'from(bucket: "telemetry") \|> range(start: -10m) \|> filter(fn: (r) => r._measurement == "gateway_frames") \|> group(columns: ["gateway_id"]) \|> sum()'` |
 | 6. Ingest | Did it store the event? | `docker compose logs ingest` |
 | 7. Databases | Rows in PostgreSQL and points in InfluxDB | `docker compose exec postgres psql -U chirpstack -d telemetry -c "SELECT dev_eui, f_cnt, rssi FROM uplinks ORDER BY id DESC LIMIT 5"` |
 

@@ -39,8 +39,20 @@ influx_count() {
     | tr -d '\r' | awk -F, '!/^#/ && NF > 1 && $NF ~ /^[0-9]+$/ { print $NF }' | tail -n 1
 }
 
+# Frames counted by gateway-tap (radio side), summed over all gateways.
+tap_frames() {
+  curl -fsS -X POST "$INFLUX_URL/api/v2/query?org=local-org"     -H "Authorization: Token local-dev-token"     -H "Content-Type: application/vnd.flux"     -H "Accept: application/csv"     --data 'from(bucket: "telemetry") |> range(start: -7d) |> filter(fn: (r) => r._measurement == "gateway_frames" and r._field == "frames") |> group() |> sum()'     | tr -d '' | awk -F, '!/^#/ && NF > 1 && $NF ~ /^[0-9]+$/ { print $NF }' | tail -n 1
+}
+
+# Alert rule state from Grafana: "inactive", "firing" or "pending".
+alert_state() {
+  curl -fsS -u admin:admin "$GRAFANA_URL/api/prometheus/grafana/api/v1/rules"     | python3 -c 'import json,sys; r=[r for g in json.load(sys.stdin)["data"]["groups"] for r in g["rules"] if r["name"]=="Radio OK, database stalled"][0]; print(r["state"] if r["health"]=="ok" else "error:"+r["health"])'
+}
+
 # Predicates for wait_for: they query again on every retry.
 pg_full() { [ "$(pg_count)" = "$EXPECTED_UPLINKS" ]; }
+tap_full() { [ "$(tap_frames)" = "$EXPECTED_UPLINKS" ]; }
+alert_idle() { [ "$(alert_state)" = inactive ]; }
 influx_full() { [ "$(influx_count)" = "$EXPECTED_UPLINKS" ]; }
 
 step "Fresh start"
@@ -70,6 +82,12 @@ docker compose logs ingest | grep -q 'session present' || fail "ingest did not l
 step "Check InfluxDB points"
 wait_for "influx points" 60 influx_full
 echo "influx points: $(influx_count)"
+
+step "Gateway tap and the alert rule"
+wait_for "gateway-tap frames" 60 tap_full
+echo "frames counted at the gateway: $(tap_frames)"
+wait_for "alert rule 'Radio OK, database stalled' inactive and healthy" 90 alert_idle
+echo "alert rule: $(alert_state)"
 
 step "Provisioning is idempotent (a second run must not activate the devices again)"
 second=$(docker compose run --rm -T provision 2>&1)
