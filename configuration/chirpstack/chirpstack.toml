@@ -1,0 +1,38 @@
+# Based on chirpstack/chirpstack-docker (MIT). Local development only.
+
+[logging]
+  level="info"
+
+[postgresql]
+  dsn="postgres://chirpstack:chirpstack@$POSTGRESQL_HOST/chirpstack?sslmode=disable"
+  max_open_connections=10
+  min_idle_connections=0
+
+[redis]
+  servers=[
+    "redis://$REDIS_HOST/",
+  ]
+  tls_enabled=false
+  cluster=false
+
+[network]
+  net_id="000000"
+
+  # Only the active region is enabled. To switch to AU915 (Brazil), enable
+  # "au915_0" instead; see "Change the region" in the README.
+  enabled_regions=[
+    "eu868",
+  ]
+
+[api]
+  bind="0.0.0.0:8080"
+  # Local development only: replace for anything but a laptop bench.
+  secret="local-development-only-not-a-secret"
+
+[integration]
+  enabled=["mqtt"]
+
+  [integration.mqtt]
+    server="tcp://$MQTT_BROKER_HOST:1883/"
+    # JSON events on application/{app_id}/device/{dev_eui}/event/{event}.
+    json=true
