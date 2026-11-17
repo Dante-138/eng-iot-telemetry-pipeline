@@ -4,7 +4,8 @@ Idempotent: run it as often as you like (an ABP device whose activation already 
 left alone, so its frame counters are not reset). It logs in with the default local
 development admin account, then ensures that these exist in the default
 tenant: the gateway, an application, a LoRaWAN 1.0.3 device profile without
-OTAA, and the ABP devices (frame counter check off) with their session activated.
+OTAA, the ABP devices (frame counter check off) with their session activated, and an OTAA
+profile with the OTAA device dev-otaa and its keys.
 
 Environment (all optional):
   CHIRPSTACK_API      host:port of the gRPC API (default chirpstack:8080)
@@ -42,6 +43,7 @@ from telemetry import provisioning, scenario
 log = logging.getLogger("provision")
 
 PROFILE_NAME = "sim-abp-lorawan-1.0.3"
+OTAA_PROFILE_NAME = "sim-otaa-lorawan-1.0.3"
 
 # REGION value -> (common.Region name)
 REGIONS = {"eu868": "EU868", "au915_0": "AU915"}
@@ -154,20 +156,24 @@ def main() -> int:
         return list(resp.result), resp.total_count
 
     profile_list = provisioning.list_all(fetch_profiles)
-    profile = _first(profile_list, PROFILE_NAME)
-    if profile is None:
+
+    def ensure_profile(name: str, description: str, otaa: bool) -> str:
+        profile = _first(profile_list, name)
+        if profile is not None:
+            log.info("device profile %s exists: %s", name, profile.id)
+            return profile.id
         profile_id = profiles.Create(
             device_profile_pb2.CreateDeviceProfileRequest(
                 device_profile=device_profile_pb2.DeviceProfile(
                     tenant_id=tenant_id,
-                    name=PROFILE_NAME,
-                    description="LoRaWAN 1.0.3, ABP, no OTAA",
+                    name=name,
+                    description=description,
                     region=getattr(common.Region, REGIONS[region_id]),
                     region_config_id=region_id,
                     mac_version=common.MacVersion.LORAWAN_1_0_3,
                     reg_params_revision=common.RegParamsRevision.A,
                     adr_algorithm_id="default",
-                    supports_otaa=False,
+                    supports_otaa=otaa,
                     uplink_interval=3600,
                     device_status_req_interval=0,
                     abp_rx1_delay=1,
@@ -177,10 +183,11 @@ def main() -> int:
             ),
             metadata=auth,
         ).id
-        log.info("device profile created: %s", profile_id)
-    else:
-        profile_id = profile.id
-        log.info("device profile exists: %s", profile_id)
+        log.info("device profile %s created: %s", name, profile_id)
+        return profile_id
+
+    profile_id = ensure_profile(PROFILE_NAME, "LoRaWAN 1.0.3, ABP, no OTAA", otaa=False)
+    otaa_profile_id = ensure_profile(OTAA_PROFILE_NAME, "LoRaWAN 1.0.3, OTAA", otaa=True)
 
     # Devices: ABP, frame counter check off, session activated
     for dev in scenario.DEVICES.values():
@@ -239,6 +246,45 @@ def main() -> int:
             metadata=auth,
         )
         log.info("device %s activated (DevAddr %08x)", dev.name, dev.dev_addr)
+
+    # dev-otaa: OTAA device. For LoRaWAN 1.0.x the AppKey goes in the nwk_key field of
+    # DeviceKeys (see the comment of DeviceKeys in chirpstack/api/proto/api/device.proto).
+    eui = scenario.OTAA_DEV_EUI.hex()
+    try:
+        devices.Get(device_pb2.GetDeviceRequest(dev_eui=eui), metadata=auth)
+        log.info("device %s (%s) exists", scenario.OTAA_NAME, eui)
+    except grpc.RpcError as exc:
+        if exc.code() != grpc.StatusCode.NOT_FOUND:
+            raise
+        devices.Create(
+            device_pb2.CreateDeviceRequest(
+                device=device_pb2.Device(
+                    dev_eui=eui,
+                    join_eui=scenario.OTAA_JOIN_EUI.hex(),
+                    name=scenario.OTAA_NAME,
+                    description="Simulated OTAA sensor (local development only)",
+                    application_id=app_id,
+                    device_profile_id=otaa_profile_id,
+                )
+            ),
+            metadata=auth,
+        )
+        log.info("device %s (%s) created", scenario.OTAA_NAME, eui)
+    keys = device_pb2.DeviceKeys(
+        dev_eui=eui, nwk_key=scenario.OTAA_APP_KEY.hex(), app_key="00" * 16
+    )
+    try:
+        current = devices.GetKeys(device_pb2.GetDeviceKeysRequest(dev_eui=eui), metadata=auth)
+        if current.device_keys.nwk_key.lower() == keys.nwk_key:
+            log.info("device %s keys already set", scenario.OTAA_NAME)
+        else:
+            devices.UpdateKeys(device_pb2.UpdateDeviceKeysRequest(device_keys=keys), metadata=auth)
+            log.info("device %s keys updated", scenario.OTAA_NAME)
+    except grpc.RpcError as exc:
+        if exc.code() != grpc.StatusCode.NOT_FOUND:
+            raise
+        devices.CreateKeys(device_pb2.CreateDeviceKeysRequest(device_keys=keys), metadata=auth)
+        log.info("device %s keys created", scenario.OTAA_NAME)
 
     log.info("provisioning done")
     return 0

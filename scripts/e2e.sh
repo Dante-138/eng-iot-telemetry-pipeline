@@ -8,8 +8,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# dev-ok 12 + dev-gap 9 + dev-weak 12 + dev-quiet 8 + dev-battery 12 (see telemetry/scenario.py)
-EXPECTED_UPLINKS=53
+# dev-ok 12 + dev-gap 9 + dev-weak 12 + dev-quiet 8 + dev-battery 12 + dev-otaa 12
+# (see telemetry/scenario.py). The gateway also counts the OTAA JoinRequest: 66 frames.
+EXPECTED_UPLINKS=65
+EXPECTED_FRAMES=66
 INFLUX_URL=${INFLUX_URL:-http://localhost:8086}
 GRAFANA_URL=${GRAFANA_URL:-http://localhost:3000}
 
@@ -51,7 +53,7 @@ alert_state() {
 
 # Predicates for wait_for: they query again on every retry.
 pg_full() { [ "$(pg_count)" = "$EXPECTED_UPLINKS" ]; }
-tap_full() { [ "$(tap_frames)" = "$EXPECTED_UPLINKS" ]; }
+tap_full() { [ "$(tap_frames)" = "$EXPECTED_FRAMES" ]; }
 alert_idle() { [ "$(alert_state)" = inactive ]; }
 influx_full() { [ "$(influx_count)" = "$EXPECTED_UPLINKS" ]; }
 
@@ -64,10 +66,19 @@ docker compose up -d --build --wait
 step "Provision ChirpStack (gateway, application, profile, ABP devices)"
 docker compose run --rm -T provision
 
-step "Run the simulator scenario"
-sim_out=$(docker compose run --rm -T simulator 2>&1)
-echo "$sim_out" | tail -n 3
-grep -Eq ', 0 without PUSH_ACK' <<< "$sim_out" || fail "gateway bridge did not acknowledge every PUSH_DATA"
+step "Run the simulator scenario (dev-otaa joins, and gets a downlink queued through the API)"
+sim_log=$(mktemp)
+SIM_EXPECT_DOWNLINK=1 docker compose run --rm -T simulator > "$sim_log" 2>&1 &
+sim_pid=$!
+wait_for "dev-otaa join" 120 grep -q 'joined dev-otaa' "$sim_log"
+docker compose run --rm -T provision python -m provision.enqueue
+sim_status=0
+wait "$sim_pid" || sim_status=$?
+tail -n 8 "$sim_log"
+[ "$sim_status" = 0 ] || fail "simulator exited with status $sim_status (join or downlink missing)"
+grep -Eq ', 0 without PUSH_ACK' "$sim_log" || fail "gateway bridge did not acknowledge every PUSH_DATA"
+grep -q 'downlink dev-otaa .*text=bench-downlink' "$sim_log" || fail "dev-otaa did not decrypt the queued downlink"
+echo "dev-otaa joined, uplinks acknowledged, downlink decrypted: $(grep -o 'text=bench-downlink' "$sim_log" | head -n 1)"
 
 step "Wait for $EXPECTED_UPLINKS rows in PostgreSQL uplinks"
 wait_for "uplinks rows" 90 pg_full
@@ -102,7 +113,8 @@ grep -Eq '^dev-gap +FAIL.*fcnt gaps' <<< "$report" || fail "dev-gap should FAIL 
 grep -Eq '^dev-weak +FAIL.*rssi' <<< "$report" || fail "dev-weak should FAIL with rssi"
 grep -Eq '^dev-quiet +FAIL +time gaps: 1 interval' <<< "$report" || fail "dev-quiet should FAIL with a time gap"
 grep -Eq '^dev-battery +FAIL +battery drop' <<< "$report" || fail "dev-battery should FAIL with battery drop"
-[ "$(echo "$report" | grep -c -E '^dev-')" = 5 ] || fail "expected exactly 5 verdicts"
+grep -Eq '^dev-otaa +PASS' <<< "$report" || fail "dev-otaa should PASS"
+[ "$(echo "$report" | grep -c -E '^dev-')" = 6 ] || fail "expected exactly 6 verdicts"
 
 step "Grafana"
 wait_for "grafana health" 60 curl -fsS "$GRAFANA_URL/api/health"

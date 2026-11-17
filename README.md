@@ -11,7 +11,7 @@ development values.
 
 ```mermaid
 flowchart LR
-    S["simulator<br/>1 gateway, 5 sensors"] -->|"Semtech UDP :1700"| B["chirpstack-gateway-bridge v4"]
+    S["simulator<br/>1 gateway, 6 sensors"] -->|"Semtech UDP :1700"| B["chirpstack-gateway-bridge v4"]
     B -->|"MQTT eu868/gateway/..."| M[("Mosquitto")]
     M --> C["ChirpStack v4<br/>(Redis + PostgreSQL)"]
     C -->|"MQTT application/+/device/+/event/up (JSON)"| M
@@ -50,6 +50,7 @@ Expected approval report for the scenario, with the end to end thresholds
 dev-battery FAIL  battery drop 330 mV above 200 mV
 dev-gap    FAIL  fcnt gaps: 1 jump(s), 3 frame(s) missing (allowed 0)
 dev-ok     PASS
+dev-otaa   PASS
 dev-quiet  FAIL  time gaps: 1 interval(s) above 5 s (longest 17 s)
 dev-weak   FAIL  rssi median -119.0 dBm below -105 dBm; rssi minimum -120 dBm below -110 dBm
 ```
@@ -63,7 +64,7 @@ Stop and delete all data with `docker compose down -v`.
 
 | Component | What it does |
 | --- | --- |
-| `simulator/` | Fake gateway: builds LoRaWAN uplinks for 5 fake sensors and sends them as Semtech UDP `PUSH_DATA`. |
+| `simulator/` | Fake gateway: builds LoRaWAN uplinks for 6 fake sensors and sends them as Semtech UDP `PUSH_DATA`. Sends `PULL_DATA` keep-alives, answers the bridge's `PULL_RESP` downlinks with `TX_ACK`, and runs the OTAA join of `dev-otaa`. |
 | `chirpstack-gateway-bridge` | Converts the Semtech UDP packet forwarder protocol to MQTT. |
 | `mosquitto` | MQTT broker between the bridge, ChirpStack and the ingest service. |
 | `chirpstack` | LoRaWAN network server: checks the MIC, decrypts the payload, publishes JSON events. |
@@ -85,10 +86,25 @@ Stop and delete all data with `docker compose down -v`.
 | `dev-weak` | RSSI around -119 dBm | FAIL (RSSI) |
 | `dev-quiet` | 4 frames, 8 s of silence, 4 more frames | FAIL (time gap, only with `thresholds.e2e.toml`) |
 | `dev-battery` | battery falls from 3600 to 3270 mV (330 mV) | FAIL (battery drop) |
+| `dev-otaa` | joins over the air (OTAA), 12 uplinks, receives a downlink | PASS |
 
 Gateway EUI, DevEUIs, DevAddrs and session keys are fixed fake test values in
 `telemetry/scenario.py`. ChirpStack accepts the frames only if its own MIC check passes, which is
 an end-to-end proof of the LoRaWAN implementation.
+
+### OTAA and downlink (`dev-otaa`)
+
+`dev-otaa` is the only OTAA device (ChirpStack device profile `sim-otaa-lorawan-1.0.3`, the others are
+ABP). The simulator sends a JoinRequest (MIC with the AppKey), receives the JoinAccept in a `PULL_RESP`
+from the bridge, answers `TX_ACK`, decrypts and validates it, derives NwkSKey and AppSKey (LoRaWAN 1.0.3)
+and sends 12 uplinks with them. The DevNonce changes on every run (seconds since the epoch), because
+ChirpStack refuses a repeated one.
+
+For LoRaWAN 1.0.x the AppKey goes in the `nwk_key` field of ChirpStack's `DeviceKeys` (documented in the
+`DeviceKeys` message of `api/proto/api/device.proto`; the join working proves it). A Class A downlink is
+sent after an uplink, so `scripts/e2e.sh` runs the simulator in the background, waits for the log line
+`joined dev-otaa`, queues the downlink with `python -m provision.enqueue` (gRPC `Enqueue`) and then
+checks that the simulator decrypted the payload `bench-downlink` on FPort 10.
 
 ### Payload: Cayenne LPP
 
@@ -215,8 +231,9 @@ Pure logic in `telemetry/`, each module testable on a PC:
 
 | Module | Purpose |
 | --- | --- |
-| `lorawan` | LoRaWAN 1.0.3 ABP uplink PHYPayload: MHDR, FHDR, FPort, FRMPayload encrypted with AppSKey, MIC (AES-CMAC with NwkSKey) |
-| `semtech_udp` | Semtech UDP `PUSH_DATA` with `rxpk`, `PULL_DATA`, `PUSH_ACK` check |
+| `lorawan` | LoRaWAN 1.0.3 data PHYPayload: uplink build and parse, downlink parse (and build, for tests): MHDR, FHDR, FPort, FRMPayload encrypted with AppSKey, MIC (AES-CMAC with NwkSKey) |
+| `otaa` | JoinRequest (MIC with the AppKey), JoinAccept decrypt and validate, NwkSKey and AppSKey derivation |
+| `semtech_udp` | Semtech UDP `PUSH_DATA` with `rxpk`, `PULL_DATA`, `PUSH_ACK` check, `PULL_RESP` (txpk) parse and `TX_ACK` |
 | `lpp` | Cayenne LPP encoder and decoder |
 | `chirpstack_event` | Fields of the `uplinks` table from the ChirpStack up event JSON |
 | `delivery` | Retry, backoff, park and ack decision of the ingest service |
@@ -224,11 +241,14 @@ Pure logic in `telemetry/`, each module testable on a PC:
 | `rules` | Metrics and thresholds to a verdict with reasons |
 | `scenario` | The deterministic simulator scenario |
 
-The LoRaWAN test vector comes from the public test suite of
-[brocaar/lorawan](https://github.com/brocaar/lorawan) (MIT), cited in `tests/test_lorawan.py`.
+The LoRaWAN test vectors (uplink data frame, JoinRequest, JoinAccept) come from the public test suite of
+[brocaar/lorawan](https://github.com/brocaar/lorawan) (MIT), cited in `tests/test_lorawan.py` and
+`tests/test_otaa.py`. No public vector is cited for the session key derivation or for a LoRaWAN 1.0.x
+downlink data frame, so those are covered by round trip tests and proven by ChirpStack accepting the
+uplinks and the simulator decrypting the downlink in `scripts/e2e.sh`.
 
 CI (`.github/workflows/ci.yml`) has three jobs: `unit` (ruff and pytest) and `e2e` (`scripts/e2e.sh`:
-compose up, provisioning, scenario, row checks in PostgreSQL and InfluxDB, the five verdicts, a second
+compose up, provisioning, scenario, row checks in PostgreSQL and InfluxDB, the six verdicts, a second
 provisioning run that must change nothing, and Grafana) and `fault-lab` (`scripts/fault-lab.sh`, see above).
 
 ## Known limitations

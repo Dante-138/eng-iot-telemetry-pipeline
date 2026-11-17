@@ -27,6 +27,18 @@ QUIET_PAUSE_S = 8.0
 BATTERY_START_MV = 3600
 BATTERY_STEP_MV = 30
 
+# dev-otaa joins over the air (LoRaWAN 1.0.3 OTAA) after the ABP devices are done, sends
+# OTAA_UPLINKS uplinks one per OTAA_INTERVAL_S and receives the downlink that the end to end
+# script queues through the ChirpStack API. Fixed, obviously fake local development values.
+OTAA_NAME = "dev-otaa"
+OTAA_DEV_EUI = bytes.fromhex("0a0b0c0d0e0f0006")
+OTAA_JOIN_EUI = bytes.fromhex("1011121314151617")
+OTAA_APP_KEY = bytes.fromhex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf")
+OTAA_UPLINKS = 12
+OTAA_INTERVAL_S = 1.0
+DOWNLINK_F_PORT = 10
+DOWNLINK_PAYLOAD = b"bench-downlink"
+
 
 @dataclass(frozen=True)
 class SimDevice:
@@ -120,5 +132,17 @@ def burst_steps(device_name: str, count: int, first_f_cnt: int = 0) -> list[Step
     return [_step(DEVICES[device_name], first_f_cnt + n) for n in range(count)]
 
 
+def otaa_steps() -> list[Step]:
+    """Uplinks of dev-otaa. DevAddr and session keys come from the join, so they are empty here."""
+    dev = SimDevice(OTAA_NAME, OTAA_DEV_EUI, 0, b"", b"")
+    return [_step(dev, n) for n in range(OTAA_UPLINKS)]
+
+
 def expected_uplinks() -> int:
-    return len(steps())
+    """Rows expected in the uplinks table after the whole scenario."""
+    return len(steps()) + OTAA_UPLINKS
+
+
+def expected_gateway_frames() -> int:
+    """Frames the gateway hands to the bridge: every uplink plus the OTAA JoinRequest."""
+    return expected_uplinks() + 1

@@ -45,3 +45,24 @@ def test_errors():
         su.parse_push_data(b"\x02\x00\x00\x00short")
     with pytest.raises(su.SemtechError):
         su.parse_push_data(bytes([2, 0, 0, 0]) + EUI + b"not json")
+
+
+def test_pull_resp_and_tx_ack():
+    # Formats from PROTOCOL.TXT of Lora-net/packet_forwarder (PULL_RESP and TX_ACK).
+    txpk = {"imme": False, "tmst": 5000000, "freq": 869.525, "datr": "SF12BW125", "data": "AQID"}
+    resp = su.parse_pull_resp(su.build_pull_resp(0xABCD, txpk))
+    assert resp.token == 0xABCD and resp.txpk == txpk
+    assert resp.phy_payload == bytes([1, 2, 3])
+    ack = su.build_tx_ack(bytes(range(8)), 0xABCD)
+    assert ack[:4] == bytes([2, 0xAB, 0xCD, 5]) and ack[4:12] == bytes(range(8))
+    assert b'"error":"NONE"' in ack[12:]
+    assert su.is_pull_resp(su.build_pull_resp(1, txpk))
+    assert not su.is_pull_resp(su.build_pull_data(bytes(8), 1))
+
+
+def test_pull_resp_rejects_garbage():
+    for bad in (b"", b"\x02\x00\x00\x03not json", b"\x02\x00\x00\x03{}", b"\x02\x00\x00\x04{}"):
+        with pytest.raises(su.SemtechError):
+            su.parse_pull_resp(bad)
+    with pytest.raises(su.SemtechError):
+        _ = su.PullResp(1, {"data": "***"}).phy_payload
