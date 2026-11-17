@@ -37,7 +37,7 @@ wait_for() {
   done
 }
 
-psql_c() { docker compose exec -T postgres psql -U chirpstack -d chirpstack -Atc "$1" | tr -d ''; }
+psql_c() { docker compose exec -T postgres psql -U chirpstack -d chirpstack -Atc "$1" | tr -d '\r'; }
 psql_t() { docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "$1" | tr -d '\r'; }
 uplink_rows() { psql_t "SELECT count(*) FROM uplinks"; }
 parked_rows() { psql_t "SELECT count(*) FROM failed_uplinks WHERE replayed_at IS NULL"; }
