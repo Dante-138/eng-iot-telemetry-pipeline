@@ -11,7 +11,7 @@ development values.
 
 ```mermaid
 flowchart LR
-    S["simulator<br/>1 gateway, 6 sensors"] -->|"Semtech UDP :1700"| B["chirpstack-gateway-bridge v4"]
+    S["simulator<br/>2 gateways, 6 sensors"] -->|"Semtech UDP :1700"| B["chirpstack-gateway-bridge v4"]
     B -->|"MQTT eu868/gateway/..."| M[("Mosquitto")]
     M --> C["ChirpStack v4<br/>(Redis + PostgreSQL)"]
     C -->|"MQTT application/+/device/+/event/up (JSON)"| M
@@ -64,7 +64,7 @@ Stop and delete all data with `docker compose down -v`.
 
 | Component | What it does |
 | --- | --- |
-| `simulator/` | Fake gateway: builds LoRaWAN uplinks for 6 fake sensors and sends them as Semtech UDP `PUSH_DATA`. Sends `PULL_DATA` keep-alives, answers the bridge's `PULL_RESP` downlinks with `TX_ACK`, and runs the OTAA join of `dev-otaa`. |
+| `simulator/` | Two fake gateways: builds LoRaWAN uplinks for 6 fake sensors and sends them as Semtech UDP `PUSH_DATA`. Sends `PULL_DATA` keep-alives, answers the bridge's `PULL_RESP` downlinks with `TX_ACK`, and runs the OTAA join of `dev-otaa`. |
 | `chirpstack-gateway-bridge` | Converts the Semtech UDP packet forwarder protocol to MQTT. |
 | `mosquitto` | MQTT broker between the bridge, ChirpStack and the ingest service. |
 | `chirpstack` | LoRaWAN network server: checks the MIC, decrypts the payload, publishes JSON events. |
@@ -81,7 +81,7 @@ Stop and delete all data with `docker compose down -v`.
 
 | Device | Behaviour | Expected verdict |
 | --- | --- | --- |
-| `dev-ok` | 12 regular uplinks, RSSI around -87 dBm | PASS |
+| `dev-ok` | 12 regular uplinks, RSSI around -87 dBm; a second gateway also hears 4 of them (fCnt 0, 3, 6, 9) | PASS |
 | `dev-gap` | frame counters 4 to 6 are never sent | FAIL (fcnt gaps) |
 | `dev-weak` | RSSI around -119 dBm | FAIL (RSSI) |
 | `dev-quiet` | 4 frames, 8 s of silence, 4 more frames | FAIL (time gap, only with `thresholds.e2e.toml`) |
@@ -91,6 +91,16 @@ Stop and delete all data with `docker compose down -v`.
 Gateway EUI, DevEUIs, DevAddrs and session keys are fixed fake test values in
 `telemetry/scenario.py`. ChirpStack accepts the frames only if its own MIC check passes, which is
 an end-to-end proof of the LoRaWAN implementation.
+
+### Two gateways
+
+A second simulated gateway (`sim-gateway-2`) hears four uplinks of `dev-ok` with another RSSI (10 dB better
+for fCnt 0 and 6, 10 dB worse for fCnt 3 and 9). ChirpStack collects the copies for a short deduplication
+window and publishes one event whose `rxInfo` has two entries. `ingest` stores one row: the RSSI, SNR and
+`gateway_id` of the best reception (highest RSSI), and `gateway_count` = the number of `rxInfo` entries.
+`scripts/e2e.sh` checks that there is no duplicated row, that exactly those four rows have
+`gateway_count` 2 and that each one carries the expected gateway and RSSI. `gateway-tap` counts the second
+gateway's frames too, so the frames at the gateways exceed the rows by those four copies and the join.
 
 ### OTAA and downlink (`dev-otaa`)
 
@@ -118,7 +128,7 @@ battery field is therefore 10 mV.
 One PostgreSQL instance, two databases: `chirpstack` (with the `pg_trgm` extension ChirpStack
 requires) and `telemetry`. The schema is `sql/schema.sql`, loaded on the first start: tables
 `devices` and `uplinks` (`dev_eui`, `received_at`, `f_cnt`, `rssi`, `snr`, `temperature_c`,
-`humidity_pct`, `battery_mv`, `gateway_id`) and `failed_uplinks` (dead letters: raw `payload`, `error`,
+`humidity_pct`, `battery_mv`, `gateway_id`, `gateway_count`) and `failed_uplinks` (dead letters: raw `payload`, `error`,
 `attempts`, `replayed_at`). `ingest` also applies `sql/schema.sql` at start, so an old volume gets new tables.
 
 ### Lossless ingestion
@@ -259,6 +269,7 @@ This is a bench, not a production pipeline:
   Mosquitto is down are lost (the fault lab shows it). Only the data side (ChirpStack to ingest to the
   databases) is lossless.
 
+- The best reception is chosen by RSSI alone (ties keep the first). A real deployment may also weigh the SNR.
 - `ingest` is at-least-once, not exactly-once: after a reconnect the broker may deliver a message again.
   The duplicate is harmless (ON CONFLICT DO NOTHING) but InfluxDB, keyed by series and timestamp, simply
   overwrites the same point. Mosquitto keeps the persistent session in memory only (no `persistence`), so

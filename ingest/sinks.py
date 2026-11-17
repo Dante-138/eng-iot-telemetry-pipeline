@@ -27,9 +27,9 @@ ON CONFLICT (dev_eui) DO UPDATE SET
 
 INSERT_UPLINK = """
 INSERT INTO uplinks (dev_eui, received_at, f_cnt, rssi, snr, temperature_c, humidity_pct,
-                     battery_mv, gateway_id)
+                     battery_mv, gateway_id, gateway_count)
 VALUES (%(dev_eui)s, %(at)s, %(f_cnt)s, %(rssi)s, %(snr)s, %(temperature_c)s, %(humidity_pct)s,
-        %(battery_mv)s, %(gateway_id)s)
+        %(battery_mv)s, %(gateway_id)s, %(gateway_count)s)
 ON CONFLICT (dev_eui, f_cnt, received_at) DO NOTHING
 """
 
@@ -84,6 +84,7 @@ class Sinks:
             "humidity_pct": row.humidity_pct,
             "battery_mv": row.battery_mv,
             "gateway_id": row.gateway_id,
+            "gateway_count": row.gateway_count,
         }
         try:
             with self._pg().transaction():
@@ -100,6 +101,7 @@ class Sinks:
             .tag("device", row.device_name)
             .time(row.received_at)
             .field("f_cnt", row.f_cnt)
+            .field("gateway_count", row.gateway_count)
         )
         if row.gateway_id:
             point = point.tag("gateway_id", row.gateway_id)

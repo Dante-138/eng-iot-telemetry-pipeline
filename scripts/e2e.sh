@@ -9,9 +9,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # dev-ok 12 + dev-gap 9 + dev-weak 12 + dev-quiet 8 + dev-battery 12 + dev-otaa 12
-# (see telemetry/scenario.py). The gateway also counts the OTAA JoinRequest: 66 frames.
+# (see telemetry/scenario.py). The gateways also count the OTAA JoinRequest and the 4 copies the second gateway
+# hears: 70 frames.
 EXPECTED_UPLINKS=65
-EXPECTED_FRAMES=66
+EXPECTED_FRAMES=70
 INFLUX_URL=${INFLUX_URL:-http://localhost:8086}
 GRAFANA_URL=${GRAFANA_URL:-http://localhost:3000}
 
@@ -83,6 +84,17 @@ echo "dev-otaa joined, uplinks acknowledged, downlink decrypted: $(grep -o 'text
 step "Wait for $EXPECTED_UPLINKS rows in PostgreSQL uplinks"
 wait_for "uplinks rows" 90 pg_full
 echo "uplinks rows: $(pg_count)"
+
+step "Two gateways: one row per uplink, gateway_count 2 only where both heard it, best reception stored"
+dups=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) - count(DISTINCT (dev_eui, f_cnt)) FROM uplinks" | tr -d '')
+[ "$dups" = 0 ] || fail "$dups duplicated uplink row(s)"
+dual=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT string_agg(f_cnt || ':' || gateway_id || ':' || rssi, ',' ORDER BY f_cnt) FROM uplinks u JOIN devices d USING (dev_eui) WHERE d.name = 'dev-ok' AND u.gateway_count = 2" | tr -d '')
+want=$(PYTHONPATH=. python3 -c "from telemetry import scenario; print(','.join(f'{f}:{g}:{r}' for f, g, r in scenario.dual_gateway_rows()))")
+[ "$dual" = "$want" ] || fail "rows with gateway_count 2 are '$dual', expected '$want'"
+others=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) FROM uplinks WHERE gateway_count <> 1" | tr -d '')
+[ "$others" = "$(tr ',' '
+' <<< "$want" | wc -l | tr -d ' ')" ] || fail "gateway_count <> 1 on $others row(s)"
+echo "no duplicates; gateway_count 2 and best reception (fCnt:gateway:rssi): $dual"
 
 step "Nothing parked in failed_uplinks, replay has nothing to do"
 parked=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) FROM failed_uplinks" | tr -d '\r')

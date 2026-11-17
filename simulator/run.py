@@ -202,8 +202,11 @@ def main() -> int:
     wrong_key = os.environ.get("SIM_WRONG_KEY") == "1"
     only = os.environ.get("SIM_DEVICE")
 
-    gw = Gateway(gateway_eui, host, port, time.monotonic())
+    start = time.monotonic()
+    gw = Gateway(gateway_eui, host, port, start)
     gw.keepalive()
+    gw2 = Gateway(scenario.GATEWAY2_EUI, host, port, start)  # hears only some frames
+    gw2.keepalive()
 
     if only:
         steps = scenario.burst_steps(only, int(os.environ.get("SIM_COUNT", "5")))
@@ -222,6 +225,9 @@ def main() -> int:
             payload=lpp.encode_reading(step.temperature_c, step.humidity_pct, step.battery_mv),
         )
         gw.push(phy, step.rssi, step.snr)
+        if step.rssi2 is not None:
+            gw2.push(phy, step.rssi2, step.snr)
+            log.info("gateway 2 also heard fCnt=%d at rssi=%d", step.f_cnt, step.rssi2)
         log.info(
             "sent %s fCnt=%d rssi=%d temp=%.1f",
             step.device.name,
@@ -245,7 +251,7 @@ def main() -> int:
         if not joined:
             status = 1
 
-    log.info("done: %d uplinks sent, %d without PUSH_ACK", total, gw.unacked)
+    log.info("done: %d uplinks sent, %d without PUSH_ACK", total, (gw.unacked + gw2.unacked))
     return status
 
 

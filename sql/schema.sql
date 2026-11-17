@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS uplinks (
     UNIQUE (dev_eui, f_cnt, received_at)
 );
 
+-- Receptions ChirpStack merged into one event (one row per uplink, whatever the gateways).
+ALTER TABLE uplinks ADD COLUMN IF NOT EXISTS gateway_count INTEGER NOT NULL DEFAULT 1;
+
 CREATE INDEX IF NOT EXISTS uplinks_dev_time_idx ON uplinks (dev_eui, received_at);
 
 -- Dead letter table of the ingest service: an up event that could not be stored after the

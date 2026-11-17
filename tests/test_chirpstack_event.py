@@ -38,6 +38,7 @@ def test_extract_fields():
     assert row.f_cnt == 7
     # the best gateway reception wins
     assert (row.rssi, row.snr, row.gateway_id) == (-80, 8.0, "aaaaaaaaaaaaaaaa")
+    assert row.gateway_count == 2  # both receptions were merged into this one event
     assert (row.temperature_c, row.humidity_pct, row.battery_mv) == (22.5, 46.0, 3250)
 
 
@@ -48,11 +49,13 @@ def test_default_valued_fields_may_be_omitted():
     row = ce.extract(event)
     assert row.f_cnt == 0
     assert row.snr == 0.0
+    assert row.gateway_count == 1
 
 
 def test_no_payload_and_no_rxinfo():
     row = ce.extract(_event(data="", rxInfo=[]))
     assert row.rssi is None and row.gateway_id is None
+    assert row.gateway_count == 0
     assert row.temperature_c is None
 
 

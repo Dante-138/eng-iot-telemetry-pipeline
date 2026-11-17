@@ -67,3 +67,19 @@ def test_e2e_script_expects_the_scenario_uplink_count():
     frames = re.search(r"^EXPECTED_FRAMES=(\d+)", text, re.M)
     assert frames, "EXPECTED_FRAMES not found in scripts/e2e.sh"
     assert int(frames.group(1)) == scenario.expected_gateway_frames()
+
+
+def test_dual_gateway_rows_pick_the_best_reception():
+    rows = scenario.dual_gateway_rows()
+    assert [r[0] for r in rows] == sorted(scenario.DUAL_FRAMES)
+    best = {f: (gw, rssi) for f, gw, rssi in rows}
+    # +10 dB at the second gateway: it wins. -10 dB: the first gateway keeps it.
+    assert best[0] == (scenario.GATEWAY2_EUI.hex(), -75)
+    assert best[3] == (scenario.GATEWAY_EUI.hex(), -88)
+    assert scenario.expected_gateway_frames() == scenario.expected_uplinks() + 4 + 1
+
+
+def test_only_dev_ok_is_heard_by_the_second_gateway_and_bursts_never_are():
+    heard = {s.device.name for s in scenario.steps() if s.rssi2 is not None}
+    assert heard == {"dev-ok"}
+    assert all(s.rssi2 is None for s in scenario.burst_steps("dev-ok", 12))

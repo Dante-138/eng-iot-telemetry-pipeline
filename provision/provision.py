@@ -95,27 +95,31 @@ def main() -> int:
     tenant_id = tenant_list[0].id
     log.info("tenant: %s (%s)", tenant_list[0].name, tenant_id)
 
-    # Gateway
-    gw_id = scenario.GATEWAY_EUI.hex()
-    try:
-        gateways.Get(gateway_pb2.GetGatewayRequest(gateway_id=gw_id), metadata=auth)
-        log.info("gateway %s exists", gw_id)
-    except grpc.RpcError as exc:
-        if exc.code() != grpc.StatusCode.NOT_FOUND:
-            raise
-        gateways.Create(
-            gateway_pb2.CreateGatewayRequest(
-                gateway=gateway_pb2.Gateway(
-                    gateway_id=gw_id,
-                    name=scenario.GATEWAY_NAME,
-                    description="Simulated gateway (local development only)",
-                    tenant_id=tenant_id,
-                    stats_interval=30,
-                )
-            ),
-            metadata=auth,
-        )
-        log.info("gateway %s created", gw_id)
+    # Gateways
+    for eui, name in (
+        (scenario.GATEWAY_EUI, scenario.GATEWAY_NAME),
+        (scenario.GATEWAY2_EUI, scenario.GATEWAY2_NAME),
+    ):
+        gw_id = eui.hex()
+        try:
+            gateways.Get(gateway_pb2.GetGatewayRequest(gateway_id=gw_id), metadata=auth)
+            log.info("gateway %s exists", gw_id)
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.NOT_FOUND:
+                raise
+            gateways.Create(
+                gateway_pb2.CreateGatewayRequest(
+                    gateway=gateway_pb2.Gateway(
+                        gateway_id=gw_id,
+                        name=name,
+                        description="Simulated gateway (local development only)",
+                        tenant_id=tenant_id,
+                        stats_interval=30,
+                    )
+                ),
+                metadata=auth,
+            )
+            log.info("gateway %s created", gw_id)
 
     # Application
     def fetch_apps(limit, offset):

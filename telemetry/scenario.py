@@ -10,6 +10,11 @@ from dataclasses import dataclass
 
 GATEWAY_EUI = bytes.fromhex("0102030405060708")
 GATEWAY_NAME = "sim-gateway"
+# A second gateway hears some uplinks of dev-ok (DUAL_FRAMES: f_cnt -> RSSI offset of the second
+# gateway relative to the first). ChirpStack deduplicates them into one event with two rxInfo.
+GATEWAY2_EUI = bytes.fromhex("0807060504030201")
+GATEWAY2_NAME = "sim-gateway-2"
+DUAL_FRAMES = {0: 10, 3: -10, 6: 10, 9: -10}
 APPLICATION_NAME = "sim-sensors"
 F_PORT = 1
 
@@ -82,9 +87,10 @@ class Step:
     humidity_pct: float
     battery_mv: int
     pause_before_s: float = 0.0  # the simulator sleeps this long before sending
+    rssi2: int | None = None  # RSSI at the second gateway, None if it did not hear the frame
 
 
-def _step(dev: SimDevice, n: int, pause_before_s: float = 0.0) -> Step:
+def _step(dev: SimDevice, n: int, pause_before_s: float = 0.0, dual: bool = False) -> Step:
     if dev.name == "dev-weak":
         rssi, snr = -118 - (n % 3), -12.0 + (n % 3) * 0.5
     else:
@@ -102,6 +108,7 @@ def _step(dev: SimDevice, n: int, pause_before_s: float = 0.0) -> Step:
         humidity_pct=45.0 + (n % 5),
         battery_mv=battery_mv,
         pause_before_s=pause_before_s,
+        rssi2=rssi + DUAL_FRAMES[n] if dual and dev.name == "dev-ok" and n in DUAL_FRAMES else None,
     )
 
 
@@ -120,7 +127,7 @@ def steps() -> list[Step]:
                 continue
             if name == "dev-quiet" and n >= QUIET_HEAD:
                 continue
-            out.append(_step(dev, n))
+            out.append(_step(dev, n, dual=True))
     quiet = DEVICES["dev-quiet"]
     for n in range(QUIET_HEAD, QUIET_UPLINKS):
         out.append(_step(quiet, n, QUIET_PAUSE_S if n == QUIET_HEAD else 0.0))
@@ -138,11 +145,24 @@ def otaa_steps() -> list[Step]:
     return [_step(dev, n) for n in range(OTAA_UPLINKS)]
 
 
+def dual_gateway_rows() -> list[tuple[int, str, int]]:
+    """Rows of dev-ok heard by both gateways: (f_cnt, gateway id, rssi) of the best reception."""
+    out = []
+    for step in steps():
+        if step.rssi2 is not None:
+            if step.rssi2 > step.rssi:
+                out.append((step.f_cnt, GATEWAY2_EUI.hex(), step.rssi2))
+            else:
+                out.append((step.f_cnt, GATEWAY_EUI.hex(), step.rssi))
+    return out
+
+
 def expected_uplinks() -> int:
     """Rows expected in the uplinks table after the whole scenario."""
     return len(steps()) + OTAA_UPLINKS
 
 
 def expected_gateway_frames() -> int:
-    """Frames the gateway hands to the bridge: every uplink plus the OTAA JoinRequest."""
-    return expected_uplinks() + 1
+    """Frames the gateways hand to the bridge: every uplink, the second gateway's copies of
+    the dual frames and the OTAA JoinRequest."""
+    return expected_uplinks() + len(dual_gateway_rows()) + 1
