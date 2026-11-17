@@ -179,6 +179,10 @@ fault_ingest_down() {
 
 fault_db_reject() {
   step "db-reject: PostgreSQL refuses the writes to uplinks"
+  # The alert compares frames of the last 30 s with rows of the last 60 s: let the rows of the
+  # previous fault age out first, or the rows still inside the window keep the alert quiet.
+  quiet() { [ "$(psql_t "SELECT count(*) FROM uplinks WHERE received_at > now() - interval '65 seconds'")" = 0 ]; }
+  wait_for "no uplink row in the last 65 s" 120 quiet
   local parked_before; parked_before=$(parked_rows)
   psql_t "ALTER TABLE uplinks ADD CONSTRAINT lab_reject CHECK (false) NOT VALID" > /dev/null
   burst

@@ -163,7 +163,8 @@ curl -s -u admin:admin http://localhost:3000/api/prometheus/grafana/api/v1/rules
 
 Observed while the database refused writes (`ALTER TABLE uplinks ADD CONSTRAINT lab_reject CHECK (false) NOT VALID`):
 `inactive` at the start, `firing` about 6 s after the simulator began, `inactive` again once the frames
-stopped and left the 30 s window (the same state also needs the previous rows to be older than 60 s).
+stopped and left the 30 s window (the same state also needs the previous rows to be older than 60 s, so the fault lab waits for 65 s
+without rows before it injects `db-reject`).
 
 ## Approval report
 
