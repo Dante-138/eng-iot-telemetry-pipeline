@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 
@@ -59,31 +60,69 @@ def item(generation=0, mid=7, payload=EVENT):
     return Item(generation, mid, 1, "application/x/device/y/event/up", payload)
 
 
+class ForbiddenClient:
+    """Any call fails: the worker must never touch the MQTT client."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"worker called client.{name}")
+
+
+def run_all(ingest):
+    """What the worker does for every queued item, then the network thread flushes the acks."""
+    while not ingest.queue.empty():
+        ingest.process(ingest.queue.get_nowait())
+    ingest.flush_acks()
+
+
+def test_process_never_touches_the_client():
+    sinks = FakeSinks(store_fails=True, park_fails=True)  # the UNACKED path as well
+    ingest = Ingest(sinks, ForbiddenClient())
+    ingest.process(item())
+    ingest.process(item(generation=5))
+    sinks.store_fails = sinks.park_fails = False
+    ingest.process(item())
+    assert ingest.acks.qsize() == 3
+
+
 def test_stored_message_is_acknowledged():
     sinks = FakeSinks()
     ingest, client = make(sinks)
-    ingest.process(item())
+    ingest.queue.put(item())
+    run_all(ingest)
     assert len(sinks.stored) == 1 and client.acks == [(7, 1)] and client.disconnects == 0
 
 
 def test_parked_message_is_acknowledged():
     sinks = FakeSinks(store_fails=True)
     ingest, client = make(sinks)
-    ingest.process(item())
+    ingest.queue.put(item())
+    run_all(ingest)
     assert len(sinks.parked) == 1 and client.acks == [(7, 1)]
 
 
-def test_message_that_cannot_be_stored_or_parked_is_not_acknowledged():
-    ingest, client = make(FakeSinks(store_fails=True, park_fails=True))
-    ingest.process(item())
+def test_message_that_cannot_be_stored_or_parked_disconnects_once_and_the_rest_is_not_acked():
+    sinks = FakeSinks(store_fails=True, park_fails=True)
+    ingest, client = make(sinks)
+    ingest.queue.put(item(mid=1))
+    ingest.process(ingest.queue.get_nowait())
+    sinks.store_fails = sinks.park_fails = False  # the database is back for the next ones
+    ingest.queue.put(item(mid=2))
+    ingest.queue.put(item(mid=3))
+    run_all(ingest)
     assert client.acks == [] and client.disconnects == 1
+    assert len(sinks.stored) == 2  # still written (idempotent), only not acknowledged
+    # after the reconnect the new connection is acknowledged again
+    ingest.on_disconnect()
+    ingest.queue.put(item(generation=1, mid=4))
+    run_all(ingest)
+    assert client.acks == [(4, 1)]
 
 
-def test_old_connection_item_that_cannot_be_stored_does_not_disconnect_the_new_one():
-    # The current connection may be healthy: a stale item must not trigger a reconnect loop.
+def test_old_connection_items_get_nothing_even_when_unacked():
     ingest, client = make(FakeSinks(store_fails=True, park_fails=True))
     ingest.on_disconnect()
-    ingest.process(item(generation=0))
+    ingest.queue.put(item(generation=0))
+    run_all(ingest)
     assert client.acks == [] and client.disconnects == 0
 
 
@@ -93,10 +132,29 @@ def test_item_of_an_old_connection_is_stored_but_not_acknowledged():
     sinks = FakeSinks()
     ingest, client = make(sinks)
     ingest.on_disconnect()
-    ingest.process(item(generation=0))
-    assert len(sinks.stored) == 1 and client.acks == []
-    ingest.process(item(generation=1, mid=9))
-    assert client.acks == [(9, 1)]
+    ingest.queue.put(item(generation=0))
+    ingest.queue.put(item(generation=1, mid=9))
+    run_all(ingest)
+    assert len(sinks.stored) == 2 and client.acks == [(9, 1)]
+
+
+def test_a_disconnect_that_runs_on_disconnect_at_once_does_not_deadlock():
+    # paho calls on_disconnect in the thread that called disconnect(). That is the network
+    # thread now, and nothing holds a lock, so it returns.
+    class Client(FakeClient):
+        def disconnect(self):
+            super().disconnect()
+            ingest.on_disconnect()
+
+    client = Client()
+    ingest = Ingest(FakeSinks(store_fails=True, park_fails=True), client)
+    ingest.queue.put(item())
+    ingest.process(ingest.queue.get_nowait())
+    thread = threading.Thread(target=ingest.flush_acks)
+    thread.start()
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+    assert client.disconnects == 1 and ingest.generation == 1
 
 
 def test_on_message_tags_the_current_generation():
