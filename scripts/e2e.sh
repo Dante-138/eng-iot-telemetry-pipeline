@@ -48,7 +48,7 @@ step "Provision ChirpStack (gateway, application, profile, 3 ABP devices)"
 docker compose run --rm -T provision
 
 step "Run the simulator scenario"
-sim_out=$(docker compose run --rm -T simulator)
+sim_out=$(docker compose run --rm -T simulator 2>&1)
 echo "$sim_out" | tail -n 3
 grep -q "0 without PUSH_ACK" <<< "$sim_out" || fail "gateway bridge did not acknowledge every PUSH_DATA"
 
