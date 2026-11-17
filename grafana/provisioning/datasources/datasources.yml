@@ -1,0 +1,30 @@
+# Local development only credentials.
+apiVersion: 1
+
+datasources:
+  - name: Telemetry PostgreSQL
+    uid: pg-telemetry
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: chirpstack
+    isDefault: true
+    jsonData:
+      database: telemetry
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    secureJsonData:
+      password: chirpstack
+
+  - name: Telemetry InfluxDB
+    uid: influx-telemetry
+    type: influxdb
+    access: proxy
+    url: http://influxdb:8086
+    jsonData:
+      version: Flux
+      organization: local-org
+      defaultBucket: telemetry
+    secureJsonData:
+      token: local-dev-token
