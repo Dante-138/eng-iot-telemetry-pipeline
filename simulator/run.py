@@ -10,6 +10,7 @@ decrypts the downlink queued for it.
 Environment (all optional):
   BRIDGE_HOST  default chirpstack-gateway-bridge (use 127.0.0.1 from the host)
   BRIDGE_PORT  default 1700
+  REGION       eu868 (default) or au915_0: uplink frequency and data rate (telemetry/regions.py)
   INTERVAL_S   pause between uplinks, default 0.3
   SIM_DEV_NONCE  DevNonce of the OTAA join (default: seconds since the epoch, modulo 65536, so
                  that every run uses a fresh one: ChirpStack refuses a repeated DevNonce)
@@ -32,7 +33,7 @@ import sys
 import time
 from datetime import UTC, datetime
 
-from telemetry import lorawan, lpp, otaa, scenario, semtech_udp
+from telemetry import lorawan, lpp, otaa, regions, scenario, semtech_udp
 
 log = logging.getLogger("simulator")
 
@@ -42,8 +43,11 @@ PULL_INTERVAL_S = 5.0
 class Gateway:
     """One fake gateway: a UDP socket to the bridge, the PULL keep-alive and downlink receipt."""
 
-    def __init__(self, eui: bytes, host: str, port: int, start: float) -> None:
+    def __init__(
+        self, eui: bytes, host: str, port: int, start: float, region: regions.Region
+    ) -> None:
         self.eui = eui
+        self.region = region
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.addr = (socket.gethostbyname(host), port)
         self.start = start
@@ -102,6 +106,8 @@ class Gateway:
             tmst=int((time.monotonic() - self.start) * 1_000_000) & 0xFFFFFFFF,
             rssi=rssi,
             lsnr=snr,
+            freq_mhz=self.region.uplink_mhz,
+            datr=self.region.datr,
             time=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         )
         self.sock.sendto(semtech_udp.build_push_data(self.eui, token, [rxpk]), self.addr)
@@ -201,11 +207,12 @@ def main() -> int:
     gateway_eui = bytes.fromhex(os.environ.get("SIM_GATEWAY_EUI", scenario.GATEWAY_EUI.hex()))
     wrong_key = os.environ.get("SIM_WRONG_KEY") == "1"
     only = os.environ.get("SIM_DEVICE")
+    region = regions.get(os.environ.get("REGION", "eu868"))
 
     start = time.monotonic()
-    gw = Gateway(gateway_eui, host, port, start)
+    gw = Gateway(gateway_eui, host, port, start, region)
     gw.keepalive()
-    gw2 = Gateway(scenario.GATEWAY2_EUI, host, port, start)  # hears only some frames
+    gw2 = Gateway(scenario.GATEWAY2_EUI, host, port, start, region)  # hears only some frames
     gw2.keepalive()
 
     if only:

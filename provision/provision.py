@@ -38,7 +38,7 @@ from chirpstack_api.api import (
     tenant_pb2_grpc,
 )
 
-from telemetry import provisioning, scenario
+from telemetry import provisioning, regions, scenario
 
 log = logging.getLogger("provision")
 
@@ -46,7 +46,6 @@ PROFILE_NAME = "sim-abp-lorawan-1.0.3"
 OTAA_PROFILE_NAME = "sim-otaa-lorawan-1.0.3"
 
 # REGION value -> (common.Region name)
-REGIONS = {"eu868": "EU868", "au915_0": "AU915"}
 
 
 def _wait_for_login(channel: grpc.Channel, email: str, password: str, timeout_s: int = 120) -> str:
@@ -76,8 +75,10 @@ def main() -> int:
     email = os.environ.get("CHIRPSTACK_EMAIL", "admin")
     password = os.environ.get("CHIRPSTACK_PASSWORD", "admin")
     region_id = os.environ.get("REGION", "eu868")
-    if region_id not in REGIONS:
-        raise SystemExit(f"REGION must be one of {sorted(REGIONS)}")
+    try:
+        region = regions.get(region_id)
+    except regions.UnknownRegionError as exc:
+        raise SystemExit(str(exc)) from exc
 
     channel = grpc.insecure_channel(target)
     jwt = _wait_for_login(channel, email, password)
@@ -172,7 +173,7 @@ def main() -> int:
                     tenant_id=tenant_id,
                     name=name,
                     description=description,
-                    region=getattr(common.Region, REGIONS[region_id]),
+                    region=getattr(common.Region, region.common_name),
                     region_config_id=region_id,
                     mac_version=common.MacVersion.LORAWAN_1_0_3,
                     reg_params_revision=common.RegParamsRevision.A,
@@ -181,8 +182,8 @@ def main() -> int:
                     uplink_interval=3600,
                     device_status_req_interval=0,
                     abp_rx1_delay=1,
-                    abp_rx2_dr=0,
-                    abp_rx2_freq=869525000 if region_id == "eu868" else 923300000,
+                    abp_rx2_dr=region.rx2_dr,
+                    abp_rx2_freq=region.rx2_freq_hz,
                 )
             ),
             metadata=auth,

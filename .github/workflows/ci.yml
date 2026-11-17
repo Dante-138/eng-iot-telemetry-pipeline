@@ -41,9 +41,15 @@ jobs:
         run: pytest -q
 
   e2e:
-    name: End to end (docker compose)
+    name: End to end (${{ matrix.region }})
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [eu868, au915_0]
+    env:
+      REGION: ${{ matrix.region }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

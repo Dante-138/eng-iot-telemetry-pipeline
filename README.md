@@ -216,18 +216,36 @@ curl -s -X POST 'http://localhost:8086/api/v2/query?org=local-org' \
   --data 'from(bucket: "telemetry") |> range(start: -1h) |> last()'
 ```
 
-## Change the region
+## Region: EU868 and AU915
 
-The bench uses EU868, the region of the official ChirpStack example. For AU915 (used in Brazil):
+One variable, `REGION`, selects the region of the whole bench. The default is `eu868`; the other value
+is `au915_0` (AU915 sub-band 1). CI runs the end to end job for both (matrix `region`).
 
-1. `configuration/chirpstack/chirpstack.toml`: set `enabled_regions=["au915_0"]`
-   (the file `region_au915_0.toml` is already there).
-2. `docker-compose.yml`: replace `eu868` by `au915_0` in the three `INTEGRATION__MQTT__*_TOPIC_TEMPLATE`
-   variables of `chirpstack-gateway-bridge`, and set `REGION=au915_0` for `provision`.
-3. `simulator/run.py` and `telemetry/semtech_udp.py`: the uplink frequency (`freq_mhz`) must be one of
-   the region channels, for example 915.2 MHz for AU915 sub-band 1, and the data rate must be valid
-   there (`SF7BW125` is valid in AU915).
-4. `docker compose down -v` and start again, so ChirpStack provisions the new region.
+```bash
+REGION=au915_0 scripts/e2e.sh                       # the full scenario on AU915
+REGION=au915_0 docker compose up -d --build --wait  # or by hand: export it for every compose command
+```
+
+What `REGION` changes (`docker-compose.yml`, `telemetry/regions.py`):
+
+- the MQTT topic prefix of the gateway bridge and of `gateway-tap` (`au915_0/gateway/<id>/event/up`);
+- the region of the device profiles in ChirpStack (`region_config_id`) and their RX2 settings
+  (869.525 MHz at DR0 in EU868, 923.3 MHz at DR8 in AU915);
+- the uplink frequency and data rate that the simulator puts in every PUSH_DATA (868.1 MHz and 915.2 MHz,
+  both SF7BW125).
+
+ChirpStack has both regions enabled (`enabled_regions` in `chirpstack.toml`, files `region_eu868.toml` and
+`region_au915_0.toml`): the env variable that would pick one is not applied to that list by ChirpStack
+(observed), so the prefix and the device profile choose the region instead. Start from an empty volume
+(`docker compose down -v`) when you change `REGION`, because the profiles are created once.
+
+Why `au915_0` and sub-band 1: AU915 has 64 channels of 125 kHz plus 8 of 500 kHz, grouped in 8 sub-bands
+of 8 channels plus one 500 kHz channel. A gateway with 8 channels listens to one sub-band. The ChirpStack
+region file `region_au915_0.toml` is sub-band 1 (channels 0 to 7 plus 64, 915.2 to 916.6 MHz and
+915.9 MHz) and is the AU915 plan that ships with ChirpStack's example configuration. The simulator sends on its
+first channel, 915.2 MHz. Use the sub-band of your own gateway in a real deployment (another region file
+in `configuration/chirpstack`, another entry in `telemetry/regions.py`). A test checks that the simulator
+frequency is a channel of the region file.
 
 ## Development
 
@@ -269,6 +287,8 @@ This is a bench, not a production pipeline:
   Mosquitto is down are lost (the fault lab shows it). Only the data side (ChirpStack to ingest to the
   databases) is lossless.
 
+- Only EU868 and AU915 sub-band 1 are covered by the simulator and by CI. In AU915 the bench does not
+  model the 500 kHz channel, the downlink data rates of RX1 or the sub-band of other gateways.
 - The best reception is chosen by RSSI alone (ties keep the first). A real deployment may also weigh the SNR.
 - `ingest` is at-least-once, not exactly-once: after a reconnect the broker may deliver a message again.
   The duplicate is harmless (ON CONFLICT DO NOTHING) but InfluxDB, keyed by series and timestamp, simply

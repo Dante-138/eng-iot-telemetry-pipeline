@@ -18,10 +18,12 @@
 [network]
   net_id="000000"
 
-  # Only the active region is enabled. To switch to AU915 (Brazil), enable
-  # "au915_0" instead; see "Change the region" in the README.
+  # Both regions are enabled and each one has its own gateway topic prefix (its id), so
+  # the region in use is chosen by the prefix of the gateway bridge (REGION in docker-compose.yml)
+  # and by the region of the device profile. ChirpStack cannot switch the list by environment.
   enabled_regions=[
     "eu868",
+    "au915_0",
   ]
 
 [api]

@@ -3,10 +3,12 @@
 #
 #   scripts/e2e.sh            fresh start (docker compose down -v), run, leave the stack up
 #   E2E_DOWN=1 scripts/e2e.sh also tear the stack down at the end
+#   REGION=au915_0 scripts/e2e.sh   same scenario on AU915 sub-band 1 (default eu868)
 #
 # Needs: docker compose v2, curl. Local development credentials only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+export REGION=${REGION:-eu868}   # read by docker compose (bridge topics, ChirpStack, simulator)
 
 # dev-ok 12 + dev-gap 9 + dev-weak 12 + dev-quiet 8 + dev-battery 12 + dev-otaa 12
 # (see telemetry/scenario.py). The gateways also count the OTAA JoinRequest and the 4 copies the second gateway
@@ -99,8 +101,11 @@ echo "no duplicates; gateway_count 2 and best reception (fCnt:gateway:rssi): $du
 step "Nothing parked in failed_uplinks, replay has nothing to do"
 parked=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) FROM failed_uplinks" | tr -d '\r')
 [ "$parked" = 0 ] || fail "failed_uplinks has $parked row(s)"
-docker compose run --rm -T ingest python -m ingest.replay | grep -q 'replayed 0, still failing 0' || fail "replay output"
-docker compose logs ingest | grep -q 'session present' || fail "ingest did not log its MQTT session"
+# Capture first: grep -q closes the pipe early and pipefail would turn the SIGPIPE into a failure.
+replay=$(docker compose run --rm -T ingest python -m ingest.replay)
+grep -q 'replayed 0, still failing 0' <<< "$replay" || fail "replay output"
+ingest_log=$(docker compose logs ingest)
+grep -q 'session present' <<< "$ingest_log" || fail "ingest did not log its MQTT session"
 
 step "Check InfluxDB points"
 wait_for "influx points" 60 influx_full

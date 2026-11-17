@@ -16,7 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REGION=${REGION:-eu868}
+export REGION=${REGION:-eu868}
 GRAFANA_URL=${GRAFANA_URL:-http://localhost:3000}
 BURST=5
 WINDOW=14   # seconds the topic taps listen
