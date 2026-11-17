@@ -61,6 +61,12 @@ step "Wait for $EXPECTED_UPLINKS rows in PostgreSQL uplinks"
 wait_for "uplinks rows" 90 pg_full
 echo "uplinks rows: $(pg_count)"
 
+step "Nothing parked in failed_uplinks, replay has nothing to do"
+parked=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) FROM failed_uplinks" | tr -d '')
+[ "$parked" = 0 ] || fail "failed_uplinks has $parked row(s)"
+docker compose run --rm -T ingest python -m ingest.replay | grep -q 'replayed 0, still failing 0' || fail "replay output"
+docker compose logs ingest | grep -q 'session present' || fail "ingest did not log its MQTT session"
+
 step "Check InfluxDB points"
 wait_for "influx points" 60 influx_full
 echo "influx points: $(influx_count)"

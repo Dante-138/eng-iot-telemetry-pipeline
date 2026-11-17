@@ -69,7 +69,7 @@ Stop and delete all data with `docker compose down -v`.
 | `chirpstack` | LoRaWAN network server: checks the MIC, decrypts the payload, publishes JSON events. |
 | `redis`, `postgres` | ChirpStack state. PostgreSQL also hosts the `telemetry` database. |
 | `provision/` | Idempotent gRPC script: gateway, application, device profile, the ABP devices. It pages its list calls and leaves a device alone when its ABP activation already matches (so frame counters are not reset). |
-| `ingest/` | Subscribes to the up events and writes InfluxDB and the PostgreSQL tables. |
+| `ingest/` | Subscribes to the up events (QoS 1, persistent session, manual ack) and writes InfluxDB and the PostgreSQL tables. A worker thread retries with backoff, then parks the raw message in `failed_uplinks`. `python -m ingest.replay` reprocesses the parked rows. |
 | `influxdb` | Time series store (measurement `uplink`). |
 | `grafana/` | Provisioned datasources and the "Telemetry overview" dashboard. |
 | `approve/` | Runs the SQL in `sql/approval/` and applies `config/thresholds.toml`. |
@@ -101,7 +101,22 @@ battery field is therefore 10 mV.
 One PostgreSQL instance, two databases: `chirpstack` (with the `pg_trgm` extension ChirpStack
 requires) and `telemetry`. The schema is `sql/schema.sql`, loaded on the first start: tables
 `devices` and `uplinks` (`dev_eui`, `received_at`, `f_cnt`, `rssi`, `snr`, `temperature_c`,
-`humidity_pct`, `battery_mv`, `gateway_id`).
+`humidity_pct`, `battery_mv`, `gateway_id`) and `failed_uplinks` (dead letters: raw `payload`, `error`,
+`attempts`, `replayed_at`). `ingest` also applies `sql/schema.sql` at start, so an old volume gets new tables.
+
+### Lossless ingestion
+
+1. ChirpStack publishes the events with QoS 1 (`qos=1` in `chirpstack.toml`) and `ingest` subscribes with
+   QoS 1 and a fixed client id without clean session, so Mosquitto queues events while `ingest` is down.
+2. `on_message` only enqueues. A worker thread stores the event and acknowledges it afterwards
+   (`manual_ack`).
+3. Retries with backoff (`INGEST_ATTEMPTS`, `INGEST_BACKOFF_S`) run on the worker, never on the network
+   thread. After the last attempt the raw message and the error go to `failed_uplinks` and the message
+   is acknowledged.
+4. If parking fails too, the message is not acknowledged and the client reconnects, so the broker sends
+   it again.
+
+The policy is the pure function `telemetry/delivery.py` (unit tested).
 
 ## Approval report
 
@@ -167,6 +182,8 @@ Pure logic in `telemetry/`, each module testable on a PC:
 | `semtech_udp` | Semtech UDP `PUSH_DATA` with `rxpk`, `PULL_DATA`, `PUSH_ACK` check |
 | `lpp` | Cayenne LPP encoder and decoder |
 | `chirpstack_event` | Fields of the `uplinks` table from the ChirpStack up event JSON |
+| `delivery` | Retry, backoff, park and ack decision of the ingest service |
+| `provisioning` | Paging and ABP activation comparison used by `provision/` |
 | `rules` | Metrics and thresholds to a verdict with reasons |
 | `scenario` | The deterministic simulator scenario |
 
@@ -181,8 +198,10 @@ provisioning run that must change nothing, and Grafana).
 
 This is a bench, not a production pipeline:
 
-- `ingest` subscribes with QoS 0 and a clean session. If a database write fails three times the
-  uplink is dropped, and the retry `sleep` runs on the MQTT network thread.
+- `ingest` is at-least-once, not exactly-once: after a reconnect the broker may deliver a message again.
+  The duplicate is harmless (ON CONFLICT DO NOTHING) but InfluxDB, keyed by series and timestamp, simply
+  overwrites the same point. Mosquitto keeps the persistent session in memory only (no `persistence`), so
+  events queued for an offline `ingest` are lost if the broker restarts too.
 
 ## License and credits
 

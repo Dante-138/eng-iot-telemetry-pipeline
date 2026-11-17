@@ -36,3 +36,6 @@
     server="tcp://$MQTT_BROKER_HOST:1883/"
     # JSON events on application/{app_id}/device/{dev_eui}/event/{event}.
     json=true
+    # QoS 1 so that events wait in the broker for the ingest service's persistent session
+    # while it is down (a QoS 0 publish is simply dropped for an offline subscriber).
+    qos=1
