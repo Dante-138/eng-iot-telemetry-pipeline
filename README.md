@@ -135,8 +135,9 @@ requires) and `telemetry`. The schema is `sql/schema.sql`, loaded on the first s
 
 1. ChirpStack publishes the events with QoS 1 (`qos=1` in `chirpstack.toml`) and `ingest` subscribes with
    QoS 1 and a fixed client id without clean session, so Mosquitto queues events while `ingest` is down.
-2. `on_message` only enqueues. A worker thread stores the event and acknowledges it afterwards
-   (`manual_ack`).
+2. `on_message` only enqueues. A worker thread stores the event and reports the outcome; the main
+   thread, the only one that touches the MQTT client, acknowledges it afterwards (`manual_ack`,
+   `flush_acks`). If neither the write nor the parking works, it disconnects and the broker redelivers.
 3. Retries with backoff (`INGEST_ATTEMPTS`, `INGEST_BACKOFF_S`) run on the worker, never on the network
    thread. After the last attempt the raw message and the error go to `failed_uplinks` and the message
    is acknowledged.
@@ -207,6 +208,7 @@ below is what the lab observed on this bench (5 uplinks of `dev-ok` per fault; C
 | `bad-mic`: wrong device key | same symptom as above | 4. ChirpStack (MIC check) | gw topic 5, app topic 0, rows +0; `None of the device-sessions for dev_addr resulted in valid MIC` | `docker compose logs chirpstack \| grep 'valid MIC'` |
 | `broker-down`: Mosquitto stopped | no rows, taps impossible; the simulator still gets every `PUSH_ACK` | 2/3. bridge to broker | rows +0, `mqtt: connection error` and `connect: connection refused` in the bridge log; frames sent meanwhile are never delivered | `docker compose logs chirpstack-gateway-bridge \| grep -E 'connection (error\|refused)'` and `docker compose ps mosquitto` |
 | `ingest-down`: ingest stopped | gw and app topics full, rows +0 | 6. ingest | gw topic 5, app topic 5, rows +0 while stopped; after the restart exactly +5 rows (persistent session, no loss, no duplicate), log `session present: True` | `docker compose ps ingest` and the two `mosquitto_sub` taps |
+| `db-down`: the telemetry database refuses connections (`ALTER DATABASE telemetry ALLOW_CONNECTIONS false`) | gw and app topics full, rows +0 | 6. ingest to database | ingest log `not acknowledged, reconnecting`; after the database is allowed again exactly +5 rows (the broker redelivers) and `ingest` still running | `docker compose logs ingest` and `docker compose ps ingest` |
 | `db-reject`: writes refused (`CHECK (false) NOT VALID` on `uplinks`) | gw and app topics full, rows +0, grafana alert "Radio OK, database stalled" firing | 7. database write | `failed_uplinks` +5, `parked ... in failed_uplinks` in the ingest log; `python -m ingest.replay` stores them and the alert returns to inactive | `docker compose exec postgres psql -U chirpstack -d telemetry -c "SELECT id, error FROM failed_uplinks WHERE replayed_at IS NULL"` |
 
 How to read it: the first tap with fewer messages than the one before it is the hop where data stopped.

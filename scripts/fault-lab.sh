@@ -6,7 +6,7 @@
 #   scripts/fault-lab.sh bad-mic broker-down  only these
 #   LAB_FRESH=1 scripts/fault-lab.sh          start from docker compose down -v
 #
-# Faults: gateway-unknown, bad-mic, broker-down, ingest-down, db-reject.
+# Faults: gateway-unknown, bad-mic, broker-down, ingest-down, db-down, db-reject.
 # Every fault sends a burst of 5 uplinks of dev-ok and "taps" each hop of the pipeline:
 #   gateway topic   mosquitto_sub on <region>/gateway/+/event/up   (bridge -> broker)
 #   app topic       mosquitto_sub on application/+/device/+/event/up (ChirpStack -> broker)
@@ -37,6 +37,7 @@ wait_for() {
   done
 }
 
+psql_c() { docker compose exec -T postgres psql -U chirpstack -d chirpstack -Atc "$1" | tr -d ''; }
 psql_t() { docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "$1" | tr -d '\r'; }
 uplink_rows() { psql_t "SELECT count(*) FROM uplinks"; }
 parked_rows() { psql_t "SELECT count(*) FROM failed_uplinks WHERE replayed_at IS NULL"; }
@@ -213,6 +214,27 @@ fault_db_reject() {
   normal_check
 }
 
+fault_db_down() {
+  step "db-down: the telemetry database refuses connections (ChirpStack keeps working)"
+  local before; before=$(uplink_rows)
+  local t1; t1=$(now_utc)
+  # Not a stopped postgres: ChirpStack lives in the same server and would stop producing events.
+  psql_c "ALTER DATABASE telemetry ALLOW_CONNECTIONS false" > /dev/null
+  psql_c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'telemetry'" > /dev/null
+  docker compose run --rm -T -e SIM_DEVICE=dev-ok -e SIM_COUNT=$BURST simulator > /dev/null
+  gave_up() { [ "$(log_hits "$t1" "not acknowledged, reconnecting" ingest)" -ge 1 ]; }
+  wait_for "ingest gave up storing and asked for a redelivery" 90 gave_up
+  psql_c "ALTER DATABASE telemetry ALLOW_CONNECTIONS true" > /dev/null
+  rows_back() { [ "$(uplink_rows)" -ge $((before + BURST)) ]; }
+  wait_for "redelivered messages stored after the database came back" 90 rows_back
+  sleep 3
+  GW_FRAMES=n/a APP_EVENTS=n/a ROWS_ADDED=$(( $(uplink_rows) - before ))
+  expect "rows stored after the database came back (no loss, no duplicate)" "$ROWS_ADDED" "$BURST"
+  [ "$(docker compose ps --status running --services | grep -c '^ingest$')" = 1 ] || fail "$FAULT: ingest is not running"
+  record db-down "6 ingest to database (UNACKED, redelivered by the broker)"     "ingest log 'not acknowledged, reconnecting'; after the database came back exactly +$BURST rows, ingest still running"
+  normal_check
+}
+
 step "Start the stack and provision it"
 [ "${LAB_FRESH:-0}" != 1 ] || docker compose down -v --remove-orphans
 docker compose up -d --build --wait
@@ -226,7 +248,7 @@ expect "app topic events" "$APP_EVENTS" "$BURST"
 expect "db rows added" "$ROWS_ADDED" "$BURST"
 printf 'result: gateway topic %s, app topic %s, db rows +%s\n' "$GW_FRAMES" "$APP_EVENTS" "$ROWS_ADDED"
 
-if [ "$#" -eq 0 ]; then set -- gateway-unknown bad-mic broker-down ingest-down db-reject; fi
+if [ "$#" -eq 0 ]; then set -- gateway-unknown bad-mic broker-down ingest-down db-down db-reject; fi
 for fault in "$@"; do
   FAULT=$fault
   case "$fault" in
@@ -234,6 +256,7 @@ for fault in "$@"; do
     bad-mic) fault_bad_mic ;;
     broker-down) fault_broker_down ;;
     ingest-down) fault_ingest_down ;;
+    db-down) fault_db_down ;;
     db-reject) fault_db_reject ;;
     *) fail "unknown fault '$fault'" ;;
   esac
