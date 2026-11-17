@@ -1,0 +1,7 @@
+# Based on chirpstack/chirpstack-docker (MIT). Local development only.
+# Semtech UDP packet forwarder backend listens on 0.0.0.0:1700 by default.
+
+[integration.mqtt.auth.generic]
+servers=["tcp://mosquitto:1883"]
+username=""
+password=""
