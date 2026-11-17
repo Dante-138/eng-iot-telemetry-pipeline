@@ -1,7 +1,9 @@
 # Provisioned alert rule: "radio OK, database stalled". Local development setup.
 #
 # A  frames the gateway handed to the bridge in the last 30 s (written by gateway-tap, InfluxDB)
-# B  rows that reached the uplinks table in the same 30 s (PostgreSQL)
+# B  rows that reached the uplinks table in the last 60 s (PostgreSQL). B has the longer window
+#    on purpose: the tap stamps frames at its flush (up to 2 s after the frame) while a row
+#    carries the time ingest wrote it, so equal windows could fire falsely at the edge.
 # E  fires when A > 0 and B = 0: the radio side is alive, the data side is not.
 #
 # Short window and interval on purpose, so that CI can see the rule fire and recover. A real

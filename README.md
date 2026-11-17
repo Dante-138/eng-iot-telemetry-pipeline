@@ -12,7 +12,7 @@ development values.
 ```mermaid
 flowchart LR
     S["simulator<br/>2 gateways, 6 sensors"] -->|"Semtech UDP :1700"| B["chirpstack-gateway-bridge v4"]
-    B -->|"MQTT eu868/gateway/..."| M[("Mosquitto")]
+    B -->|"MQTT &lt;region&gt;/gateway/..."| M[("Mosquitto")]
     M --> C["ChirpStack v4<br/>(Redis + PostgreSQL)"]
     C -->|"MQTT application/+/device/+/event/up (JSON)"| M
     M --> I["ingest (Python)"]
@@ -107,7 +107,7 @@ gateway's frames too, so the frames at the gateways exceed the rows by those fou
 `dev-otaa` is the only OTAA device (ChirpStack device profile `sim-otaa-lorawan-1.0.3`, the others are
 ABP). The simulator sends a JoinRequest (MIC with the AppKey), receives the JoinAccept in a `PULL_RESP`
 from the bridge, answers `TX_ACK`, decrypts and validates it, derives NwkSKey and AppSKey (LoRaWAN 1.0.3)
-and sends 12 uplinks with them. The DevNonce changes on every run (seconds since the epoch), because
+and sends 16 uplinks with them. The DevNonce changes on every run (seconds since the epoch), because
 ChirpStack refuses a repeated one.
 
 For LoRaWAN 1.0.x the AppKey goes in the `nwk_key` field of ChirpStack's `DeviceKeys` (documented in the
@@ -152,8 +152,8 @@ recover; use minutes in a real deployment): frames counted by `gateway-tap` in I
 greater than 0 **and** no new row in PostgreSQL `uplinks` in the last 60 s. The row window is the longer
 one on purpose: the tap stamps frames when it flushes (up to 2 s after the frame) and a row carries the
 time ingest wrote it, so equal windows could fire falsely at the edge when traffic is sparse. It means the radio side is alive and
-the data side is not. No frames at all is not this alert (the rule stays OK). It also fires for the `gateway-unknown` and
-`bad-mic` faults of the fault lab: the bridge counts frames that ChirpStack then drops, so frames > 0 and
+the data side is not. No frames at all is not this alert (the rule stays OK). It should also fire for the `gateway-unknown` and
+`bad-mic` faults of the fault lab (expected from the rule, not checked by the fault lab): the bridge counts frames that ChirpStack then drops, so frames > 0 and
 rows = 0 there too. Read it as "the radio side is alive and nothing reaches the table", then use the
 fault lab table to find the layer. Check it with:
 
@@ -299,7 +299,8 @@ This is a bench, not a production pipeline:
 - `ingest` is at-least-once, not exactly-once: after a reconnect the broker may deliver a message again.
   The duplicate is harmless (ON CONFLICT DO NOTHING) but InfluxDB, keyed by series and timestamp, simply
   overwrites the same point. Mosquitto writes the persistent session to the volume `mosquittodata`
-  (`persistence true`), so events queued for an offline `ingest` survive a broker restart. `docker compose
+  (`persistence true`, `autosave_interval 30`): events queued for an offline `ingest` survive a clean
+  broker restart, but a kill or an out of memory stop of the broker loses up to 30 s of queue (not tested). `docker compose
   down -v` deletes that volume too. A message the worker stores after a reconnect is written but not
   acknowledged, and arrives again as a harmless duplicate.
 
