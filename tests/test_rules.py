@@ -93,7 +93,7 @@ def test_shell_scripts_have_no_carriage_return():
     # the file as binary. Write '\r' as backslash and r instead.
     import pathlib
 
-    scripts = sorted(pathlib.Path("scripts").glob("*.sh"))
+    scripts = sorted((pathlib.Path(__file__).resolve().parent.parent / "scripts").glob("*.sh"))
     assert scripts
     for path in scripts:
         assert b"\r" not in path.read_bytes(), f"{path} contains a carriage return"

@@ -12,7 +12,7 @@
 #   app topic       mosquitto_sub on application/+/device/+/event/up (ChirpStack -> broker)
 #   database        rows in uplinks and in failed_uplinks
 #   logs            the line of the component that explains the stop
-# Needs: docker compose v2, curl, python3. Local development credentials only.
+# Needs: docker compose v2, curl. Local development credentials only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -48,7 +48,7 @@ log_hits() {
 }
 alert_state() {
   curl -fsS -u admin:admin "$GRAFANA_URL/api/prometheus/grafana/api/v1/rules" \
-    | python3 -c 'import json,sys; r=[r for g in json.load(sys.stdin)["data"]["groups"] for r in g["rules"] if r["name"]=="Radio OK, database stalled"][0]; print(r["state"] if r["health"]=="ok" else "error:"+r["health"])'
+    | docker compose run --rm -T approve python -c 'import json,sys; r=[r for g in json.load(sys.stdin)["data"]["groups"] for r in g["rules"] if r["name"]=="Radio OK, database stalled"][0]; print(r["state"] if r["health"]=="ok" else "error:"+r["health"])'
 }
 
 # sub_bg <file> <topic>: tap a topic for $WINDOW seconds in the background, one line per message
@@ -70,7 +70,9 @@ burst() {
   fi
   local envs=()
   for kv in "$@"; do envs+=(-e "$kv"); done
-  SIM_OUT=$(docker compose run --rm -T -e SIM_DEVICE=dev-ok -e SIM_COUNT=$BURST "${envs[@]}" simulator 2>&1) || true
+  SIM_RC=0
+  SIM_OUT=$(docker compose run --rm -T -e SIM_DEVICE=dev-ok -e SIM_COUNT=$BURST "${envs[@]}" simulator 2>&1) || SIM_RC=$?
+  [ "$SIM_RC" = 0 ] || fail "simulator exited with status $SIM_RC: $SIM_OUT"
   SIM_ACKS=$(grep -o '[0-9]* without PUSH_ACK' <<< "$SIM_OUT" | cut -d' ' -f1 || true)
   [ -n "$SIM_ACKS" ] || fail "simulator output has no PUSH_ACK count: $SIM_OUT"
   [ "${#pids[@]}" -eq 0 ] || wait "${pids[@]}"

@@ -77,7 +77,8 @@ docker compose run --rm -T provision
 
 step "Run the simulator scenario (dev-otaa joins, and gets a downlink queued through the API)"
 sim_log=$(mktemp)
-trap 'rm -f "$sim_log"' EXIT
+sim_pid=
+trap 'rm -f "$sim_log"; [ -z "$sim_pid" ] || kill "$sim_pid" 2>/dev/null || true' EXIT
 SIM_EXPECT_DOWNLINK=1 docker compose run --rm -T simulator > "$sim_log" 2>&1 &
 sim_pid=$!
 wait_for "dev-otaa join" 120 grep -q 'joined dev-otaa' "$sim_log"
