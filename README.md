@@ -292,8 +292,10 @@ This is a bench, not a production pipeline:
 - The best reception is chosen by RSSI alone (ties keep the first). A real deployment may also weigh the SNR.
 - `ingest` is at-least-once, not exactly-once: after a reconnect the broker may deliver a message again.
   The duplicate is harmless (ON CONFLICT DO NOTHING) but InfluxDB, keyed by series and timestamp, simply
-  overwrites the same point. Mosquitto keeps the persistent session in memory only (no `persistence`), so
-  events queued for an offline `ingest` are lost if the broker restarts too.
+  overwrites the same point. Mosquitto writes the persistent session to the volume `mosquittodata`
+  (`persistence true`), so events queued for an offline `ingest` survive a broker restart. `docker compose
+  down -v` deletes that volume too. A message the worker stores after a reconnect is written but not
+  acknowledged, and arrives again as a harmless duplicate.
 
 ## License and credits
 

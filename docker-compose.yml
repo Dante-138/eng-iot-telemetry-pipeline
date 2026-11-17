@@ -80,6 +80,7 @@ services:
       - "1883:1883"
     volumes:
       - ./configuration/mosquitto/config/:/mosquitto/config/:ro
+      - mosquittodata:/mosquitto/data
     healthcheck:
       test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/broker/uptime' -C 1 -W 3 > /dev/null"]
       interval: 3s
@@ -200,3 +201,4 @@ volumes:
   redisdata:
   influxdata:
   grafanadata:
+  mosquittodata:
