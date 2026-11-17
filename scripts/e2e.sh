@@ -10,11 +10,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export REGION=${REGION:-eu868}   # read by docker compose (bridge topics, ChirpStack, simulator)
 
-# dev-ok 12 + dev-gap 9 + dev-weak 12 + dev-quiet 8 + dev-battery 12 + dev-otaa 12
+# dev-ok 12 + dev-gap 9 + dev-weak 12 + dev-quiet 8 + dev-battery 12 + dev-otaa 16
 # (see telemetry/scenario.py). The gateways also count the OTAA JoinRequest and the 4 copies the second gateway
-# hears: 70 frames.
-EXPECTED_UPLINKS=65
-EXPECTED_FRAMES=70
+# hears: 74 frames.
+EXPECTED_UPLINKS=69
+EXPECTED_FRAMES=74
 INFLUX_URL=${INFLUX_URL:-http://localhost:8086}
 GRAFANA_URL=${GRAFANA_URL:-http://localhost:3000}
 
@@ -46,12 +46,18 @@ influx_count() {
 
 # Frames counted by gateway-tap (radio side), summed over all gateways.
 tap_frames() {
-  curl -fsS -X POST "$INFLUX_URL/api/v2/query?org=local-org"     -H "Authorization: Token local-dev-token"     -H "Content-Type: application/vnd.flux"     -H "Accept: application/csv"     --data 'from(bucket: "telemetry") |> range(start: -7d) |> filter(fn: (r) => r._measurement == "gateway_frames" and r._field == "frames") |> group() |> sum()'     | tr -d '' | awk -F, '!/^#/ && NF > 1 && $NF ~ /^[0-9]+$/ { print $NF }' | tail -n 1
+  curl -fsS -X POST "$INFLUX_URL/api/v2/query?org=local-org" \
+    -H "Authorization: Token local-dev-token" \
+    -H "Content-Type: application/vnd.flux" \
+    -H "Accept: application/csv" \
+    --data 'from(bucket: "telemetry") |> range(start: -7d) |> filter(fn: (r) => r._measurement == "gateway_frames" and r._field == "frames") |> group() |> sum()' \
+    | tr -d '\r' | awk -F, '!/^#/ && NF > 1 && $NF ~ /^[0-9]+$/ { print $NF }' | tail -n 1
 }
 
 # Alert rule state from Grafana: "inactive", "firing" or "pending".
 alert_state() {
-  curl -fsS -u admin:admin "$GRAFANA_URL/api/prometheus/grafana/api/v1/rules"     | python3 -c 'import json,sys; r=[r for g in json.load(sys.stdin)["data"]["groups"] for r in g["rules"] if r["name"]=="Radio OK, database stalled"][0]; print(r["state"] if r["health"]=="ok" else "error:"+r["health"])'
+  curl -fsS -u admin:admin "$GRAFANA_URL/api/prometheus/grafana/api/v1/rules" \
+    | docker compose run --rm -T approve python -c 'import json,sys; r=[r for g in json.load(sys.stdin)["data"]["groups"] for r in g["rules"] if r["name"]=="Radio OK, database stalled"][0]; print(r["state"] if r["health"]=="ok" else "error:"+r["health"])'
 }
 
 # Predicates for wait_for: they query again on every retry.
@@ -71,6 +77,7 @@ docker compose run --rm -T provision
 
 step "Run the simulator scenario (dev-otaa joins, and gets a downlink queued through the API)"
 sim_log=$(mktemp)
+trap 'rm -f "$sim_log"' EXIT
 SIM_EXPECT_DOWNLINK=1 docker compose run --rm -T simulator > "$sim_log" 2>&1 &
 sim_pid=$!
 wait_for "dev-otaa join" 120 grep -q 'joined dev-otaa' "$sim_log"
@@ -88,14 +95,14 @@ wait_for "uplinks rows" 90 pg_full
 echo "uplinks rows: $(pg_count)"
 
 step "Two gateways: one row per uplink, gateway_count 2 only where both heard it, best reception stored"
-dups=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) - count(DISTINCT (dev_eui, f_cnt)) FROM uplinks" | tr -d '')
+dups=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) - count(DISTINCT (dev_eui, f_cnt)) FROM uplinks" | tr -d '\r')
 [ "$dups" = 0 ] || fail "$dups duplicated uplink row(s)"
-dual=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT string_agg(f_cnt || ':' || gateway_id || ':' || rssi, ',' ORDER BY f_cnt) FROM uplinks u JOIN devices d USING (dev_eui) WHERE d.name = 'dev-ok' AND u.gateway_count = 2" | tr -d '')
-want=$(PYTHONPATH=. python3 -c "from telemetry import scenario; print(','.join(f'{f}:{g}:{r}' for f, g, r in scenario.dual_gateway_rows()))")
+dual=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT string_agg(f_cnt || ':' || gateway_id || ':' || rssi, ',' ORDER BY f_cnt) FROM uplinks u JOIN devices d USING (dev_eui) WHERE d.name = 'dev-ok' AND u.gateway_count = 2" | tr -d '\r')
+want=$(docker compose run --rm -T approve python -c "from telemetry import scenario; print(','.join(f'{f}:{g}:{r}' for f, g, r in scenario.dual_gateway_rows()))" | tr -d '\r')
 [ "$dual" = "$want" ] || fail "rows with gateway_count 2 are '$dual', expected '$want'"
-others=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) FROM uplinks WHERE gateway_count <> 1" | tr -d '')
-[ "$others" = "$(tr ',' '
-' <<< "$want" | wc -l | tr -d ' ')" ] || fail "gateway_count <> 1 on $others row(s)"
+others=$(docker compose exec -T postgres psql -U chirpstack -d telemetry -Atc "SELECT count(*) FROM uplinks WHERE gateway_count <> 1" | tr -d '\r')
+want_rows=$(tr ',' '\n' <<< "$want" | wc -l | tr -d ' ')
+[ "$others" = "$want_rows" ] || fail "gateway_count <> 1 on $others row(s), expected $want_rows"
 echo "no duplicates; gateway_count 2 and best reception (fCnt:gateway:rssi): $dual"
 
 step "Nothing parked in failed_uplinks, replay has nothing to do"
