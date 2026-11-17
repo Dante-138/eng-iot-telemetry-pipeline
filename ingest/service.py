@@ -94,8 +94,14 @@ class Ingest:
         elif outcome.status == delivery.PARKED:
             log.error("parked %s in failed_uplinks: %s", item.topic, outcome.error)
         else:
-            log.error("not acknowledged, reconnecting: %s", outcome.error)
-            self.client.disconnect()  # loop_forever returns, main reconnects
+            with self.lock:
+                current = item.generation == self.generation
+                if current:
+                    log.error("not acknowledged, reconnecting: %s", outcome.error)
+                    self.client.disconnect()  # loop_forever returns, main reconnects
+                else:
+                    # the connection it came from is gone and the current one may be healthy
+                    log.error("not acknowledged (old connection): %s", outcome.error)
             return
         with self.lock:  # the generation cannot change between the check and the ack
             if item.generation == self.generation:

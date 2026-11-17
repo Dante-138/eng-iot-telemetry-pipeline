@@ -79,6 +79,14 @@ def test_message_that_cannot_be_stored_or_parked_is_not_acknowledged():
     assert client.acks == [] and client.disconnects == 1
 
 
+def test_old_connection_item_that_cannot_be_stored_does_not_disconnect_the_new_one():
+    # The current connection may be healthy: a stale item must not trigger a reconnect loop.
+    ingest, client = make(FakeSinks(store_fails=True, park_fails=True))
+    ingest.on_disconnect()
+    ingest.process(item(generation=0))
+    assert client.acks == [] and client.disconnects == 0
+
+
 def test_item_of_an_old_connection_is_stored_but_not_acknowledged():
     # After a broker restart without its session nobody delivers it again, so it is written
     # now (the insert is idempotent); its message id is meaningless on the new connection.
@@ -91,7 +99,7 @@ def test_item_of_an_old_connection_is_stored_but_not_acknowledged():
     assert client.acks == [(9, 1)]
 
 
-def test_on_message_tags_the_current_generation_and_work_drains_the_queue():
+def test_on_message_tags_the_current_generation():
     sinks = FakeSinks()
     ingest, client = make(sinks)
 
