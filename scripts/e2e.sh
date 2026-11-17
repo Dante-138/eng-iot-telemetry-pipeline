@@ -48,7 +48,9 @@ step "Provision ChirpStack (gateway, application, profile, 3 ABP devices)"
 docker compose run --rm -T provision
 
 step "Run the simulator scenario"
-docker compose run --rm -T simulator
+sim_out=$(docker compose run --rm -T simulator)
+echo "$sim_out" | tail -n 3
+echo "$sim_out" | grep -q "0 without PUSH_ACK" || fail "gateway bridge did not acknowledge every PUSH_DATA"
 
 step "Wait for $EXPECTED_UPLINKS rows in PostgreSQL uplinks"
 wait_for "uplinks rows" 90 test "$(pg_count)" = "$EXPECTED_UPLINKS"
