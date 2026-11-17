@@ -1,0 +1,21 @@
+# Approval thresholds: the single place where they are defined.
+# Generic bench defaults chosen for this project, not taken from any product.
+# Tune them for your own devices and radio environment.
+
+# A device needs at least this many uplinks to be evaluated.
+min_uplinks = 5
+
+# Frames missing according to f_cnt jumps (LAG over f_cnt): FAIL above this.
+max_fcnt_missing = 0
+
+# Longest accepted silence between two consecutive uplinks, in seconds.
+max_interval_s = 900
+
+# RSSI of the best gateway reception, in dBm. Near the LoRa SF7 limit of about
+# -123 dBm, -110 leaves some link margin.
+rssi_min_dbm = -110
+rssi_median_min_dbm = -105
+
+# Battery voltage in millivolts: absolute floor and allowed drop over the run.
+battery_min_mv = 3000
+battery_max_drop_mv = 200

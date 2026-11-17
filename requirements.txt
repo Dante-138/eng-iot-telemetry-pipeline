@@ -1,0 +1,2 @@
+# Pure logic (used by the unit tests)
+pycryptodome==4.5.0

@@ -1,0 +1,7 @@
+# Services and tools that talk to the network (Docker image)
+-r requirements.txt
+paho-mqtt==2.2.0
+psycopg[binary]==3.3.9
+influxdb-client==1.50.0
+chirpstack-api==4.20.0
+grpcio==1.85.1
