@@ -50,7 +50,7 @@ docker compose run --rm -T provision
 step "Run the simulator scenario"
 sim_out=$(docker compose run --rm -T simulator)
 echo "$sim_out" | tail -n 3
-echo "$sim_out" | grep -q "0 without PUSH_ACK" || fail "gateway bridge did not acknowledge every PUSH_DATA"
+grep -q "0 without PUSH_ACK" <<< "$sim_out" || fail "gateway bridge did not acknowledge every PUSH_DATA"
 
 step "Wait for $EXPECTED_UPLINKS rows in PostgreSQL uplinks"
 wait_for "uplinks rows" 90 test "$(pg_count)" = "$EXPECTED_UPLINKS"
@@ -63,17 +63,17 @@ echo "influx points: $(influx_count)"
 step "Approval report"
 report=$(docker compose run --rm -T approve)
 echo "$report"
-echo "$report" | grep -Eq '^dev-ok +PASS' || fail "dev-ok should PASS"
-echo "$report" | grep -Eq '^dev-gap +FAIL.*fcnt gaps' || fail "dev-gap should FAIL with fcnt gaps"
-echo "$report" | grep -Eq '^dev-weak +FAIL.*rssi' || fail "dev-weak should FAIL with rssi"
+grep -Eq '^dev-ok +PASS' <<< "$report" || fail "dev-ok should PASS"
+grep -Eq '^dev-gap +FAIL.*fcnt gaps' <<< "$report" || fail "dev-gap should FAIL with fcnt gaps"
+grep -Eq '^dev-weak +FAIL.*rssi' <<< "$report" || fail "dev-weak should FAIL with rssi"
 [ "$(echo "$report" | grep -c -E '^dev-')" = 3 ] || fail "expected exactly 3 verdicts"
 
 step "Grafana"
 wait_for "grafana health" 60 curl -fsS "$GRAFANA_URL/api/health"
 wait_for "dashboard listed" 60 bash -c "curl -fsS -u admin:admin '$GRAFANA_URL/api/search?query=Telemetry' | grep -q 'Telemetry overview'"
 for uid in pg-telemetry influx-telemetry; do
-  curl -fsS -u admin:admin "$GRAFANA_URL/api/datasources/uid/$uid/health" | grep -q '"status":"OK"' \
-    || fail "Grafana datasource $uid is not healthy"
+  health=$(curl -fsS -u admin:admin "$GRAFANA_URL/api/datasources/uid/$uid/health")
+  grep -q '"status":"OK"' <<< "$health" || fail "Grafana datasource $uid is not healthy: $health"
 done
 echo "dashboard 'Telemetry overview' and both datasources are up"
 
