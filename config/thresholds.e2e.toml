@@ -1,0 +1,12 @@
+# Thresholds used only by the end to end test (THRESHOLDS variable of the approve tool).
+# Same as thresholds.toml except max_interval_s, shortened so that the 8 s silence of
+# dev-quiet (telemetry/scenario.py) counts as a time gap while the regular devices, which
+# send every 2 s or so, stay well under it.
+
+min_uplinks = 5
+max_fcnt_missing = 0
+max_interval_s = 5
+rssi_min_dbm = -110
+rssi_median_min_dbm = -105
+battery_min_mv = 3000
+battery_max_drop_mv = 200

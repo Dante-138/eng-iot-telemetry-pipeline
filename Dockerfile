@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements-runtime.txt
 COPY telemetry ./telemetry
 COPY simulator ./simulator
 COPY ingest ./ingest
+COPY gateway_tap ./gateway_tap
 COPY provision ./provision
 COPY approve ./approve
 COPY sql ./sql

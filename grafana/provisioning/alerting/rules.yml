@@ -1,0 +1,72 @@
+# Provisioned alert rule: "radio OK, database stalled". Local development setup.
+#
+# A  frames the gateway handed to the bridge in the last 30 s (written by gateway-tap, InfluxDB)
+# B  rows that reached the uplinks table in the same 30 s (PostgreSQL)
+# E  fires when A > 0 and B = 0: the radio side is alive, the data side is not.
+#
+# Short window and interval on purpose, so that CI can see the rule fire and recover. A real
+# deployment would use minutes. When there are no frames at all (A has no data) the rule is
+# OK: a silent radio is a different problem, with a different alert.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: pipeline-health
+    folder: Telemetry
+    interval: 10s
+    rules:
+      - uid: radio-ok-database-stalled
+        title: Radio OK, database stalled
+        condition: E
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          layer: ingest
+        annotations:
+          summary: The gateway receives frames but no new row reached the uplinks table.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 30, to: 0 }
+            datasourceUid: influx-telemetry
+            model:
+              refId: A
+              query: |
+                from(bucket: "telemetry")
+                  |> range(start: -30s)
+                  |> filter(fn: (r) => r._measurement == "gateway_frames" and r._field == "frames")
+                  |> group()
+                  |> aggregateWindow(every: 30s, fn: sum, createEmpty: false)
+          - refId: B
+            relativeTimeRange: { from: 30, to: 0 }
+            datasourceUid: pg-telemetry
+            model:
+              refId: B
+              editorMode: code
+              format: time_series
+              rawQuery: true
+              rawSql: >-
+                SELECT now() AS time, count(*)::float8 AS uplink_rows
+                FROM uplinks WHERE received_at > now() - interval '30 seconds'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: reduce
+              expression: A
+              reducer: sum
+              settings: { mode: dropNN }
+          - refId: D
+            datasourceUid: __expr__
+            model:
+              refId: D
+              type: reduce
+              expression: B
+              reducer: last
+              settings: { mode: dropNN }
+          - refId: E
+            datasourceUid: __expr__
+            model:
+              refId: E
+              type: math
+              expression: $C > 0 && $D == 0

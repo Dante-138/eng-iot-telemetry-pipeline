@@ -78,9 +78,9 @@ def test_multiple_reasons_are_all_reported():
 def test_scenario_shape():
     steps = scenario.steps()
     by = {n: [s for s in steps if s.device.name == n] for n in scenario.DEVICES}
-    assert len(by["dev-ok"]) == 12 and len(by["dev-weak"]) == 12
-    assert len(by["dev-gap"]) == 9
-    assert scenario.expected_uplinks() == 33
+    assert len(by["dev-ok"]) == 12 and len(by["dev-weak"]) == 12 and len(by["dev-battery"]) == 12
+    assert len(by["dev-gap"]) == 9 and len(by["dev-quiet"]) == 8
+    assert len(steps) == 53 and scenario.expected_uplinks() == 65
     assert max(s.rssi for s in by["dev-weak"]) < T.rssi_min_dbm
     assert min(s.rssi for s in by["dev-ok"]) >= T.rssi_min_dbm
     assert all(s.battery_mv >= T.battery_min_mv for s in steps)

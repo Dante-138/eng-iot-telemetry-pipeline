@@ -26,6 +26,7 @@ class UplinkRow:
     humidity_pct: float | None
     battery_mv: int | None
     gateway_id: str | None
+    gateway_count: int = 1  # receptions ChirpStack merged into this event (len of rxInfo)
 
 
 def parse_time(value: str) -> datetime:
@@ -89,4 +90,5 @@ def extract(event: dict) -> UplinkRow:
         humidity_pct=reading.humidity_pct,
         battery_mv=reading.battery_mv,
         gateway_id=gateway_id,
+        gateway_count=len(event.get("rxInfo") or []),
     )
