@@ -59,11 +59,16 @@ def main() -> int:
             time=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         )
         sock.sendto(semtech_udp.build_push_data(scenario.GATEWAY_EUI, token, [rxpk]), addr)
-        try:
-            ack, _ = sock.recvfrom(64)
-            if not semtech_udp.is_push_ack(ack, token):
-                unacked += 1
-        except TimeoutError:
+        # The bridge also answers PULL_DATA with PULL_ACK: skip it, wait for our PUSH_ACK.
+        acked = False
+        deadline = time.monotonic() + 2.0
+        while not acked and time.monotonic() < deadline:
+            try:
+                ack, _ = sock.recvfrom(64)
+            except TimeoutError:
+                break
+            acked = semtech_udp.is_push_ack(ack, token)
+        if not acked:
             unacked += 1
         log.info(
             "sent %s fCnt=%d rssi=%d temp=%.1f",
