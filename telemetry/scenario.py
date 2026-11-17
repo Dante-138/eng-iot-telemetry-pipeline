@@ -115,5 +115,10 @@ def steps() -> list[Step]:
     return out
 
 
+def burst_steps(device_name: str, count: int, first_f_cnt: int = 0) -> list[Step]:
+    """A short run of regular uplinks of one device (used by scripts/fault-lab.sh)."""
+    return [_step(DEVICES[device_name], first_f_cnt + n) for n in range(count)]
+
+
 def expected_uplinks() -> int:
     return len(steps())

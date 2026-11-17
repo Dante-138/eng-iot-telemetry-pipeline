@@ -162,6 +162,26 @@ Follow the packet one hop at a time and stop at the first layer where it disappe
 | 6. Ingest | Did it store the event? | `docker compose logs ingest` |
 | 7. Databases | Rows in PostgreSQL and points in InfluxDB | `docker compose exec postgres psql -U chirpstack -d telemetry -c "SELECT dev_eui, f_cnt, rssi FROM uplinks ORDER BY id DESC LIMIT 5"` |
 
+### Fault lab: symptom, layer, command that proves it
+
+`scripts/fault-lab.sh` injects one failure at a time, taps every hop and goes back to normal. Each row
+below is what the lab observed on this bench (5 uplinks of `dev-ok` per fault; CI runs it as the job
+`fault-lab`). "gw topic" and "app topic" are message counts from `mosquitto_sub` on
+`eu868/gateway/+/event/up` and `application/+/device/+/event/up`.
+
+| Fault (script name) | Symptom | Layer where it stopped | Observed | Command that proves it |
+| --- | --- | --- | --- | --- |
+| `gateway-unknown`: gateway not registered | no rows, nothing on the app topic | 4. ChirpStack | gw topic 5, app topic 0, rows +0; ChirpStack logs `Getting gateway meta-data failed` | `docker compose logs chirpstack \| grep 'gateway meta-data'` |
+| `bad-mic`: wrong device key | same symptom as above | 4. ChirpStack (MIC check) | gw topic 5, app topic 0, rows +0; `None of the device-sessions for dev_addr resulted in valid MIC` | `docker compose logs chirpstack \| grep 'valid MIC'` |
+| `broker-down`: Mosquitto stopped | no rows, taps impossible; the simulator still gets every `PUSH_ACK` | 2/3. bridge to broker | rows +0, `mqtt: connection error` and `connect: connection refused` in the bridge log; frames sent meanwhile are never delivered | `docker compose logs chirpstack-gateway-bridge \| grep -E 'connection (error\|refused)'` and `docker compose ps mosquitto` |
+| `ingest-down`: ingest stopped | gw and app topics full, rows +0 | 6. ingest | gw topic 5, app topic 5, rows +0 while stopped; after the restart exactly +5 rows (persistent session, no loss, no duplicate), log `session present: True` | `docker compose ps ingest` and the two `mosquitto_sub` taps |
+| `db-reject`: writes refused (`CHECK (false) NOT VALID` on `uplinks`) | gw and app topics full, rows +0, grafana alert "Radio OK, database stalled" firing | 7. database write | `failed_uplinks` +5, `parked ... in failed_uplinks` in the ingest log; `python -m ingest.replay` stores them and the alert returns to inactive | `docker compose exec postgres psql -U chirpstack -d telemetry -c "SELECT id, error FROM failed_uplinks WHERE replayed_at IS NULL"` |
+
+How to read it: the first tap with fewer messages than the one before it is the hop where data stopped.
+Gateway topic full and app topic empty is ChirpStack (bad gateway or bad MIC, told apart by its log);
+both full and no rows is ingest or the database (told apart by `docker compose ps ingest` and
+`failed_uplinks`).
+
 For InfluxDB:
 
 ```bash
@@ -207,13 +227,17 @@ Pure logic in `telemetry/`, each module testable on a PC:
 The LoRaWAN test vector comes from the public test suite of
 [brocaar/lorawan](https://github.com/brocaar/lorawan) (MIT), cited in `tests/test_lorawan.py`.
 
-CI (`.github/workflows/ci.yml`) has two jobs: `unit` (ruff and pytest) and `e2e` (`scripts/e2e.sh`:
+CI (`.github/workflows/ci.yml`) has three jobs: `unit` (ruff and pytest) and `e2e` (`scripts/e2e.sh`:
 compose up, provisioning, scenario, row checks in PostgreSQL and InfluxDB, the five verdicts, a second
-provisioning run that must change nothing, and Grafana).
+provisioning run that must change nothing, and Grafana) and `fault-lab` (`scripts/fault-lab.sh`, see above).
 
 ## Known limitations
 
 This is a bench, not a production pipeline:
+
+- The radio side is best effort: the gateway bridge publishes at QoS 0, so uplinks that arrive while
+  Mosquitto is down are lost (the fault lab shows it). Only the data side (ChirpStack to ingest to the
+  databases) is lossless.
 
 - `ingest` is at-least-once, not exactly-once: after a reconnect the broker may deliver a message again.
   The duplicate is harmless (ON CONFLICT DO NOTHING) but InfluxDB, keyed by series and timestamp, simply

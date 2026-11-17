@@ -61,3 +61,25 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  fault-lab:
+    name: Fault lab (one failure per layer)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Injects gateway-unknown, bad-mic, broker-down, ingest-down and db-reject one at a
+      # time, checks where the data stopped and that the pipeline recovers.
+      - name: Run scripts/fault-lab.sh
+        run: LAB_FRESH=1 scripts/fault-lab.sh
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=300
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

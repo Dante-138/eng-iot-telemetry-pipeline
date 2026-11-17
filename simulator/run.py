@@ -9,6 +9,12 @@ Environment (all optional):
   BRIDGE_HOST  default chirpstack-gateway-bridge (use 127.0.0.1 from the host)
   BRIDGE_PORT  default 1700
   INTERVAL_S   pause between uplinks, default 0.3
+
+Fault injection, used by scripts/fault-lab.sh (default: the full scenario, no fault):
+  SIM_DEVICE       send only SIM_COUNT (default 5) regular uplinks of this device
+  SIM_COUNT        number of uplinks in that burst
+  SIM_GATEWAY_EUI  hex EUI to use instead of the scenario gateway (a gateway nobody registered)
+  SIM_WRONG_KEY    set to 1 to sign the frames with a wrong NwkSKey (invalid MIC)
 """
 
 from __future__ import annotations
@@ -31,6 +37,8 @@ def main() -> int:
     port = int(os.environ.get("BRIDGE_PORT", "1700"))
     interval = float(os.environ.get("INTERVAL_S", "0.3"))
 
+    gateway_eui = bytes.fromhex(os.environ.get("SIM_GATEWAY_EUI", scenario.GATEWAY_EUI.hex()))
+    wrong_key = os.environ.get("SIM_WRONG_KEY") == "1"
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(2.0)
     addr = (socket.gethostbyname(host), port)
@@ -39,9 +47,13 @@ def main() -> int:
     unacked = 0
 
     # PULL_DATA tells the bridge the gateway is alive (needed for downlinks).
-    sock.sendto(semtech_udp.build_pull_data(scenario.GATEWAY_EUI, 0xFFFF), addr)
+    sock.sendto(semtech_udp.build_pull_data(gateway_eui, 0xFFFF), addr)
 
-    steps = scenario.steps()
+    only = os.environ.get("SIM_DEVICE")
+    if only:
+        steps = scenario.burst_steps(only, int(os.environ.get("SIM_COUNT", "5")))
+    else:
+        steps = scenario.steps()
     for step in steps:
         if step.pause_before_s:
             log.info("silence of %.0f s before %s", step.pause_before_s, step.device.name)
@@ -49,7 +61,7 @@ def main() -> int:
         token = (token + 1) & 0xFFFF
         phy = lorawan.build_uplink(
             dev_addr=step.device.dev_addr,
-            nwk_s_key=step.device.nwk_s_key,
+            nwk_s_key=bytes(16) if wrong_key else step.device.nwk_s_key,
             app_s_key=step.device.app_s_key,
             f_cnt=step.f_cnt,
             f_port=scenario.F_PORT,
@@ -62,7 +74,7 @@ def main() -> int:
             lsnr=step.snr,
             time=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         )
-        sock.sendto(semtech_udp.build_push_data(scenario.GATEWAY_EUI, token, [rxpk]), addr)
+        sock.sendto(semtech_udp.build_push_data(gateway_eui, token, [rxpk]), addr)
         # The bridge also answers PULL_DATA with PULL_ACK: skip it, wait for our PUSH_ACK.
         acked = False
         deadline = time.monotonic() + 2.0
