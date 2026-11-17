@@ -1,8 +1,9 @@
-"""Simulator: one fake gateway forwarding uplinks of three fake sensors.
+"""Simulator: one fake gateway forwarding uplinks of fake sensors.
 
 Sends Semtech UDP PUSH_DATA to the gateway bridge. The scenario is fixed (see
 telemetry/scenario.py): dev-ok is regular with good RSSI, dev-gap skips some
-frame counters, dev-weak has RSSI below the approval threshold.
+frame counters, dev-weak has RSSI below the approval threshold, dev-quiet goes silent for a
+while and dev-battery loses too much battery.
 
 Environment (all optional):
   BRIDGE_HOST  default chirpstack-gateway-bridge (use 127.0.0.1 from the host)
@@ -42,6 +43,9 @@ def main() -> int:
 
     steps = scenario.steps()
     for step in steps:
+        if step.pause_before_s:
+            log.info("silence of %.0f s before %s", step.pause_before_s, step.device.name)
+            time.sleep(step.pause_before_s)
         token = (token + 1) & 0xFFFF
         phy = lorawan.build_uplink(
             dev_addr=step.device.dev_addr,

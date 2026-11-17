@@ -1,9 +1,10 @@
 """Provision ChirpStack over gRPC with the simulator's gateway and devices.
 
-Idempotent: run it as often as you like. It logs in with the default local
+Idempotent: run it as often as you like (an ABP device whose activation already matches is
+left alone, so its frame counters are not reset). It logs in with the default local
 development admin account, then ensures that these exist in the default
 tenant: the gateway, an application, a LoRaWAN 1.0.3 device profile without
-OTAA, and 3 ABP devices (frame counter check off) with their session activated.
+OTAA, and the ABP devices (frame counter check off) with their session activated.
 
 Environment (all optional):
   CHIRPSTACK_API      host:port of the gRPC API (default chirpstack:8080)
@@ -36,7 +37,7 @@ from chirpstack_api.api import (
     tenant_pb2_grpc,
 )
 
-from telemetry import scenario
+from telemetry import provisioning, scenario
 
 log = logging.getLogger("provision")
 
@@ -115,9 +116,16 @@ def main() -> int:
         log.info("gateway %s created", gw_id)
 
     # Application
-    app_list = apps.List(
-        application_pb2.ListApplicationsRequest(limit=100, tenant_id=tenant_id), metadata=auth
-    ).result
+    def fetch_apps(limit, offset):
+        resp = apps.List(
+            application_pb2.ListApplicationsRequest(
+                limit=limit, offset=offset, tenant_id=tenant_id
+            ),
+            metadata=auth,
+        )
+        return list(resp.result), resp.total_count
+
+    app_list = provisioning.list_all(fetch_apps)
     app = _first(app_list, scenario.APPLICATION_NAME)
     if app is None:
         app_id = apps.Create(
@@ -136,10 +144,16 @@ def main() -> int:
         log.info("application exists: %s", app_id)
 
     # Device profile: LoRaWAN 1.0.3, ABP only
-    profile_list = profiles.List(
-        device_profile_pb2.ListDeviceProfilesRequest(limit=100, tenant_id=tenant_id),
-        metadata=auth,
-    ).result
+    def fetch_profiles(limit, offset):
+        resp = profiles.List(
+            device_profile_pb2.ListDeviceProfilesRequest(
+                limit=limit, offset=offset, tenant_id=tenant_id
+            ),
+            metadata=auth,
+        )
+        return list(resp.result), resp.total_count
+
+    profile_list = provisioning.list_all(fetch_profiles)
     profile = _first(profile_list, PROFILE_NAME)
     if profile is None:
         profile_id = profiles.Create(
@@ -192,18 +206,34 @@ def main() -> int:
             )
             log.info("device %s (%s) created", dev.name, eui)
         # LoRaWAN 1.0.x has a single network session key: use it for all three.
+        wanted = {
+            "dev_addr": f"{dev.dev_addr:08x}",
+            "app_s_key": dev.app_s_key.hex(),
+            "nwk_s_enc_key": dev.nwk_s_key.hex(),
+            "s_nwk_s_int_key": dev.nwk_s_key.hex(),
+            "f_nwk_s_int_key": dev.nwk_s_key.hex(),
+        }
+        try:
+            current = devices.GetActivation(
+                device_pb2.GetDeviceActivationRequest(dev_eui=eui), metadata=auth
+            ).device_activation
+            current_fields = {f: getattr(current, f) for f in provisioning.ACTIVATION_FIELDS}
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.NOT_FOUND:
+                raise
+            current_fields = None
+        if provisioning.activation_matches(current_fields, wanted):
+            # Activating again would reset the frame counters for nothing.
+            log.info("device %s already activated (DevAddr %08x)", dev.name, dev.dev_addr)
+            continue
         devices.Activate(
             device_pb2.ActivateDeviceRequest(
                 device_activation=device_pb2.DeviceActivation(
                     dev_eui=eui,
-                    dev_addr=f"{dev.dev_addr:08x}",
-                    app_s_key=dev.app_s_key.hex(),
-                    nwk_s_enc_key=dev.nwk_s_key.hex(),
-                    s_nwk_s_int_key=dev.nwk_s_key.hex(),
-                    f_nwk_s_int_key=dev.nwk_s_key.hex(),
                     f_cnt_up=0,
                     n_f_cnt_down=0,
                     a_f_cnt_down=0,
+                    **wanted,
                 )
             ),
             metadata=auth,

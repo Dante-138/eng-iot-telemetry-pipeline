@@ -11,7 +11,7 @@ development values.
 
 ```mermaid
 flowchart LR
-    S["simulator<br/>1 gateway, 3 sensors"] -->|"Semtech UDP :1700"| B["chirpstack-gateway-bridge v4"]
+    S["simulator<br/>1 gateway, 5 sensors"] -->|"Semtech UDP :1700"| B["chirpstack-gateway-bridge v4"]
     B -->|"MQTT eu868/gateway/..."| M[("Mosquitto")]
     M --> C["ChirpStack v4<br/>(Redis + PostgreSQL)"]
     C -->|"MQTT application/+/device/+/event/up (JSON)"| M
@@ -29,7 +29,7 @@ Requirements: Docker with Compose v2, and `curl`. Python is only needed for the 
 
 ```bash
 docker compose up -d --build --wait          # start the bench
-docker compose run --rm provision            # gateway, application, profile, 3 ABP devices
+docker compose run --rm provision            # gateway, application, profile, the ABP devices
 docker compose run --rm simulator            # send the deterministic scenario
 docker compose run --rm approve              # PASS / FAIL per device
 ```
@@ -43,13 +43,19 @@ runs). Then open:
 | ChirpStack UI | http://localhost:8080 | admin / admin |
 | InfluxDB UI | http://localhost:8086 | admin / local-dev-password (token `local-dev-token`) |
 
-Expected approval report for the scenario:
+Expected approval report for the scenario, with the end to end thresholds
+(`THRESHOLDS=config/thresholds.e2e.toml`, which `scripts/e2e.sh` uses):
 
 ```
+dev-battery FAIL  battery drop 330 mV above 200 mV
 dev-gap    FAIL  fcnt gaps: 1 jump(s), 3 frame(s) missing (allowed 0)
 dev-ok     PASS
+dev-quiet  FAIL  time gaps: 1 interval(s) above 5 s (longest 17 s)
 dev-weak   FAIL  rssi median -119.0 dBm below -105 dBm; rssi minimum -120 dBm below -110 dBm
 ```
+
+With the default `config/thresholds.toml` (`max_interval_s = 900`) `dev-quiet` passes: its 8 s silence is
+only a gap under the shortened limit of the end to end file.
 
 Stop and delete all data with `docker compose down -v`.
 
@@ -57,12 +63,12 @@ Stop and delete all data with `docker compose down -v`.
 
 | Component | What it does |
 | --- | --- |
-| `simulator/` | Fake gateway: builds LoRaWAN uplinks for 3 fake sensors and sends them as Semtech UDP `PUSH_DATA`. |
+| `simulator/` | Fake gateway: builds LoRaWAN uplinks for 5 fake sensors and sends them as Semtech UDP `PUSH_DATA`. |
 | `chirpstack-gateway-bridge` | Converts the Semtech UDP packet forwarder protocol to MQTT. |
 | `mosquitto` | MQTT broker between the bridge, ChirpStack and the ingest service. |
 | `chirpstack` | LoRaWAN network server: checks the MIC, decrypts the payload, publishes JSON events. |
 | `redis`, `postgres` | ChirpStack state. PostgreSQL also hosts the `telemetry` database. |
-| `provision/` | Idempotent gRPC script: gateway, application, device profile, 3 ABP devices. |
+| `provision/` | Idempotent gRPC script: gateway, application, device profile, the ABP devices. It pages its list calls and leaves a device alone when its ABP activation already matches (so frame counters are not reset). |
 | `ingest/` | Subscribes to the up events and writes InfluxDB and the PostgreSQL tables. |
 | `influxdb` | Time series store (measurement `uplink`). |
 | `grafana/` | Provisioned datasources and the "Telemetry overview" dashboard. |
@@ -76,6 +82,8 @@ Stop and delete all data with `docker compose down -v`.
 | `dev-ok` | 12 regular uplinks, RSSI around -87 dBm | PASS |
 | `dev-gap` | frame counters 4 to 6 are never sent | FAIL (fcnt gaps) |
 | `dev-weak` | RSSI around -119 dBm | FAIL (RSSI) |
+| `dev-quiet` | 4 frames, 8 s of silence, 4 more frames | FAIL (time gap, only with `thresholds.e2e.toml`) |
+| `dev-battery` | battery falls from 3600 to 3270 mV (330 mV) | FAIL (battery drop) |
 
 Gateway EUI, DevEUIs, DevAddrs and session keys are fixed fake test values in
 `telemetry/scenario.py`. ChirpStack accepts the frames only if its own MIC check passes, which is
@@ -166,8 +174,8 @@ The LoRaWAN test vector comes from the public test suite of
 [brocaar/lorawan](https://github.com/brocaar/lorawan) (MIT), cited in `tests/test_lorawan.py`.
 
 CI (`.github/workflows/ci.yml`) has two jobs: `unit` (ruff and pytest) and `e2e` (`scripts/e2e.sh`:
-compose up, provisioning, scenario, row checks in PostgreSQL and InfluxDB, the three verdicts, and
-Grafana).
+compose up, provisioning, scenario, row checks in PostgreSQL and InfluxDB, the five verdicts, a second
+provisioning run that must change nothing, and Grafana).
 
 ## Known limitations
 
@@ -175,10 +183,6 @@ This is a bench, not a production pipeline:
 
 - `ingest` subscribes with QoS 0 and a clean session. If a database write fails three times the
   uplink is dropped, and the retry `sleep` runs on the MQTT network thread.
-- `provision` activates the ABP devices again on every run, which resets the uplink frame counter
-  in ChirpStack (harmless with `skip_fcnt_check`). Its list calls do not page past 100 items.
-- The end to end test exercises fCnt gaps and RSSI. Time gaps and battery drop are covered by the
-  unit tests only.
 
 ## License and credits
 
