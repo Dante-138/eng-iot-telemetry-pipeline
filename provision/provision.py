@@ -45,8 +45,6 @@ log = logging.getLogger("provision")
 PROFILE_NAME = "sim-abp-lorawan-1.0.3"
 OTAA_PROFILE_NAME = "sim-otaa-lorawan-1.0.3"
 
-# REGION value -> (common.Region name)
-
 
 def _wait_for_login(channel: grpc.Channel, email: str, password: str, timeout_s: int = 120) -> str:
     stub = internal_pb2_grpc.InternalServiceStub(channel)

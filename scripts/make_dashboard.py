@@ -120,5 +120,5 @@ dashboard = {
 }
 
 out = Path(__file__).resolve().parent.parent / "grafana" / "dashboards" / "telemetry.json"
-out.write_text(json.dumps(dashboard, indent=2) + "\n")
+out.write_text(json.dumps(dashboard, indent=2) + "\n", newline="\n")
 print(f"wrote {out}")

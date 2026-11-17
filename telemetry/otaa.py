@@ -15,6 +15,7 @@ they are little endian, so this module reverses them.
 
 from __future__ import annotations
 
+import hmac
 from dataclasses import dataclass
 
 from Crypto.Cipher import AES
@@ -66,7 +67,7 @@ def parse_join_request(phy: bytes, app_key: bytes) -> JoinRequest:
     """Parse a JoinRequest and verify its MIC (the network server side, used by the tests)."""
     if len(phy) != 23 or phy[0] != MHDR_JOIN_REQUEST:
         raise OtaaError("not a JoinRequest")
-    if _cmac(app_key, phy[:-MIC_LEN]) != phy[-MIC_LEN:]:
+    if not hmac.compare_digest(_cmac(app_key, phy[:-MIC_LEN]), phy[-MIC_LEN:]):
         raise OtaaError("MIC mismatch")
     return JoinRequest(
         join_eui=phy[1:9][::-1],
@@ -120,7 +121,7 @@ def parse_join_accept(phy: bytes, app_key: bytes) -> JoinAccept:
     body = phy[1:]
     plain = b"".join(cipher.encrypt(body[i : i + 16]) for i in range(0, len(body), 16))
     fields, mic = plain[:-MIC_LEN], plain[-MIC_LEN:]
-    if _cmac(app_key, phy[:1] + fields) != mic:
+    if not hmac.compare_digest(_cmac(app_key, phy[:1] + fields), mic):
         raise OtaaError("MIC mismatch")
     return JoinAccept(
         app_nonce=int.from_bytes(fields[0:3], "little"),
