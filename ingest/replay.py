@@ -25,7 +25,9 @@ def replay(sinks: Sinks, limit: int | None = None) -> tuple[int, int]:
     """Return (replayed, still failing)."""
     conn = sinks._pg()
     sql = "SELECT id, payload FROM failed_uplinks WHERE replayed_at IS NULL ORDER BY id"
-    if limit:
+    if limit is not None:
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
         sql += f" LIMIT {int(limit)}"
     pending = conn.execute(sql).fetchall()
     done = failing = 0
@@ -50,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--limit", type=int, default=None, help="replay at most N rows")
     args = parser.parse_args(argv)
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be at least 1")
     done, failing = replay(Sinks(), args.limit)
     print(f"replayed {done}, still failing {failing}")
     return 1 if failing else 0
