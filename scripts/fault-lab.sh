@@ -70,8 +70,9 @@ burst() {
   fi
   local envs=()
   for kv in "$@"; do envs+=(-e "$kv"); done
-  SIM_OUT=$(docker compose run --rm -T -e SIM_DEVICE=dev-ok -e SIM_COUNT=$BURST "${envs[@]}" simulator 2>&1)
-  SIM_ACKS=$(grep -o '[0-9]* without PUSH_ACK' <<< "$SIM_OUT" | cut -d' ' -f1)
+  SIM_OUT=$(docker compose run --rm -T -e SIM_DEVICE=dev-ok -e SIM_COUNT=$BURST "${envs[@]}" simulator 2>&1) || true
+  SIM_ACKS=$(grep -o '[0-9]* without PUSH_ACK' <<< "$SIM_OUT" | cut -d' ' -f1 || true)
+  [ -n "$SIM_ACKS" ] || fail "simulator output has no PUSH_ACK count: $SIM_OUT"
   [ "${#pids[@]}" -eq 0 ] || wait "${pids[@]}"
   GW_FRAMES=n/a APP_EVENTS=n/a
   if [ "${TAP:-1}" = 1 ]; then

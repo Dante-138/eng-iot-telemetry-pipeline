@@ -71,7 +71,7 @@ Stop and delete all data with `docker compose down -v`.
 | `redis`, `postgres` | ChirpStack state. PostgreSQL also hosts the `telemetry` database. |
 | `provision/` | Idempotent gRPC script: gateway, application, device profile, the ABP devices. It pages its list calls and leaves a device alone when its ABP activation already matches (so frame counters are not reset). |
 | `ingest/` | Subscribes to the up events (QoS 1, persistent session, manual ack) and writes InfluxDB and the PostgreSQL tables. A worker thread retries with backoff, then parks the raw message in `failed_uplinks`. `python -m ingest.replay` reprocesses the parked rows. |
-| `gateway-tap` | Same image as `ingest`, its own entrypoint. Subscribes to `eu868/gateway/+/event/up` (radio side), counts frames per gateway from the topic alone (no payload decoding) and writes `gateway_frames` to InfluxDB every 2 s. |
+| `gateway-tap` | Same image as `ingest`, its own entrypoint. Subscribes to `<region>/gateway/+/event/up` (radio side), counts frames per gateway from the topic alone (no payload decoding) and writes `gateway_frames` to InfluxDB every 2 s. |
 | `influxdb` | Time series store (measurements `uplink` and `gateway_frames`). |
 | `grafana/` | Provisioned datasources, the "Telemetry overview" dashboard and the alert rule "Radio OK, database stalled". |
 | `approve/` | Runs the SQL in `sql/approval/` and applies `config/thresholds.toml`. |
@@ -86,7 +86,7 @@ Stop and delete all data with `docker compose down -v`.
 | `dev-weak` | RSSI around -119 dBm | FAIL (RSSI) |
 | `dev-quiet` | 4 frames, 8 s of silence, 4 more frames | FAIL (time gap, only with `thresholds.e2e.toml`) |
 | `dev-battery` | battery falls from 3600 to 3270 mV (330 mV) | FAIL (battery drop) |
-| `dev-otaa` | joins over the air (OTAA), 12 uplinks, receives a downlink | PASS |
+| `dev-otaa` | joins over the air (OTAA), 16 uplinks, receives a downlink | PASS |
 
 Gateway EUI, DevEUIs, DevAddrs and session keys are fixed fake test values in
 `telemetry/scenario.py`. ChirpStack accepts the frames only if its own MIC check passes, which is
@@ -147,10 +147,15 @@ The policy is the pure function `telemetry/delivery.py` (unit tested).
 
 ### Alert: radio OK, database stalled
 
-`grafana/provisioning/alerting/rules.yml` evaluates every 10 s over a 30 s window (short on purpose, so CI
-can see it fire and recover; use minutes in a real deployment): frames counted by `gateway-tap` in
-InfluxDB greater than 0 **and** no new row in PostgreSQL `uplinks`. It means the radio side is alive and
-the data side is not. No frames at all is not this alert (the rule stays OK). Check it with:
+`grafana/provisioning/alerting/rules.yml` evaluates every 10 s (short on purpose, so CI can see it fire and
+recover; use minutes in a real deployment): frames counted by `gateway-tap` in InfluxDB in the last 30 s
+greater than 0 **and** no new row in PostgreSQL `uplinks` in the last 60 s. The row window is the longer
+one on purpose: the tap stamps frames when it flushes (up to 2 s after the frame) and a row carries the
+time ingest wrote it, so equal windows could fire falsely at the edge when traffic is sparse. It means the radio side is alive and
+the data side is not. No frames at all is not this alert (the rule stays OK). It also fires for the `gateway-unknown` and
+`bad-mic` faults of the fault lab: the bridge counts frames that ChirpStack then drops, so frames > 0 and
+rows = 0 there too. Read it as "the radio side is alive and nothing reaches the table", then use the
+fault lab table to find the layer. Check it with:
 
 ```bash
 curl -s -u admin:admin http://localhost:3000/api/prometheus/grafana/api/v1/rules
@@ -158,7 +163,7 @@ curl -s -u admin:admin http://localhost:3000/api/prometheus/grafana/api/v1/rules
 
 Observed while the database refused writes (`ALTER TABLE uplinks ADD CONSTRAINT lab_reject CHECK (false) NOT VALID`):
 `inactive` at the start, `firing` about 6 s after the simulator began, `inactive` again once the frames
-stopped and left the 30 s window.
+stopped and left the 30 s window (the same state also needs the previous rows to be older than 60 s).
 
 ## Approval report
 
@@ -181,7 +186,7 @@ Follow the packet one hop at a time and stop at the first layer where it disappe
 | --- | --- | --- |
 | 1. Packet forwarder (simulator) | Is it sending, and does the bridge acknowledge (`PUSH_ACK`)? | `docker compose run --rm simulator` (logs `sent ...`, and `without PUSH_ACK` count at the end) |
 | 2. Gateway bridge | Did the UDP packet arrive and turn into MQTT? | `docker compose logs chirpstack-gateway-bridge` |
-| 3. MQTT, gateway topic | Raw uplink as published by the bridge | `docker compose exec mosquitto mosquitto_sub -t 'eu868/gateway/+/event/up' -v` |
+| 3. MQTT, gateway topic | Raw uplink as published by the bridge | `docker compose exec mosquitto mosquitto_sub -t '<region>/gateway/+/event/up' -v` |
 | 4. ChirpStack | MIC, DevAddr, session, region. Errors such as "gateway does not exist" or "invalid MIC" appear here | `docker compose logs chirpstack` |
 | 5. MQTT integration | Decoded event as JSON | `docker compose exec mosquitto mosquitto_sub -t 'application/+/device/+/event/up' -v` |
 | 5b. Radio side count | How many frames each gateway handed to the bridge (independent of ingest) | `curl -s -X POST 'http://localhost:8086/api/v2/query?org=local-org' -H 'Authorization: Token local-dev-token' -H 'Content-Type: application/vnd.flux' --data 'from(bucket: "telemetry") \|> range(start: -10m) \|> filter(fn: (r) => r._measurement == "gateway_frames") \|> group(columns: ["gateway_id"]) \|> sum()'` |
@@ -193,7 +198,7 @@ Follow the packet one hop at a time and stop at the first layer where it disappe
 `scripts/fault-lab.sh` injects one failure at a time, taps every hop and goes back to normal. Each row
 below is what the lab observed on this bench (5 uplinks of `dev-ok` per fault; CI runs it as the job
 `fault-lab`). "gw topic" and "app topic" are message counts from `mosquitto_sub` on
-`eu868/gateway/+/event/up` and `application/+/device/+/event/up`.
+`<region>/gateway/+/event/up` and `application/+/device/+/event/up` (`<region>` is `eu868` by default, see Region).
 
 | Fault (script name) | Symptom | Layer where it stopped | Observed | Command that proves it |
 | --- | --- | --- | --- | --- |

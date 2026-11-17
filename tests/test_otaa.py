@@ -90,12 +90,26 @@ def test_rejects_malformed_join_frames():
 
 
 def test_derive_session_keys():
-    # No public vector for the derivation is cited here: the proof that these keys are the
-    # ones ChirpStack derives is the end to end test (it accepts the MICs made with them).
-    nwk, app = otaa.derive_session_keys(ACCEPT_APP_KEY, 5704647, 0x221101, 4141)
-    assert len(nwk) == len(app) == 16 and nwk != app
-    assert (nwk, app) == otaa.derive_session_keys(ACCEPT_APP_KEY, 5704647, 0x221101, 4141)
-    other, _ = otaa.derive_session_keys(ACCEPT_APP_KEY, 5704647, 0x221101, 4142)
+    # LoRaWAN 1.0.x section 6.2.5: NwkSKey = aes128_encrypt(AppKey, 0x01 | AppNonce | NetID |
+    # DevNonce | pad16), AppSKey the same with 0x02. Restated here with raw AES-ECB (the same
+    # formula written out again, not a public test vector). The proof against a real network
+    # server is the end to end test: ChirpStack accepts the MICs made with these keys.
+    from Crypto.Cipher import AES
+
+    app_nonce, net_id, dev_nonce = 5704647, 0x221101, 4141
+
+    def expected(prefix: int) -> bytes:
+        block = (
+            bytes([prefix])
+            + app_nonce.to_bytes(3, "little")
+            + net_id.to_bytes(3, "little")
+            + dev_nonce.to_bytes(2, "little")
+        ).ljust(16, bytes(1))
+        return AES.new(ACCEPT_APP_KEY, AES.MODE_ECB).encrypt(block)
+
+    nwk, app = otaa.derive_session_keys(ACCEPT_APP_KEY, app_nonce, net_id, dev_nonce)
+    assert nwk == expected(0x01) and app == expected(0x02) and nwk != app
+    other, _ = otaa.derive_session_keys(ACCEPT_APP_KEY, app_nonce, net_id, dev_nonce + 1)
     assert other != nwk  # a new DevNonce gives new keys
 
 

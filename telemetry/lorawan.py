@@ -11,6 +11,7 @@ FPort 0). The MIC is the first 4 bytes of AES-CMAC(NwkSKey, B0 | msg)
 
 from __future__ import annotations
 
+import hmac
 from dataclasses import dataclass
 
 from Crypto.Cipher import AES
@@ -138,7 +139,7 @@ def parse_uplink(phy: bytes, *, nwk_s_key: bytes, app_s_key: bytes, f_cnt_msb: i
         raise LorawanError("FOpts overruns the frame")
     f_opts = phy[8:pos]
     msg, mic = phy[:-MIC_LEN], phy[-MIC_LEN:]
-    if compute_mic(nwk_s_key, dev_addr, f_cnt, msg) != mic:
+    if not hmac.compare_digest(compute_mic(nwk_s_key, dev_addr, f_cnt, msg), mic):
         raise LorawanError("MIC mismatch")
     f_port = None
     payload = b""
@@ -214,7 +215,7 @@ def parse_downlink(
     if pos > len(phy) - MIC_LEN:
         raise LorawanError("FOpts overruns the frame")
     msg, mic = phy[:-MIC_LEN], phy[-MIC_LEN:]
-    if compute_mic(nwk_s_key, dev_addr, f_cnt, msg, DIR_DOWN) != mic:
+    if not hmac.compare_digest(compute_mic(nwk_s_key, dev_addr, f_cnt, msg, DIR_DOWN), mic):
         raise LorawanError("MIC mismatch")
     f_port = None
     payload = b""

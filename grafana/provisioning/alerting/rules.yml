@@ -38,7 +38,7 @@ groups:
                   |> group()
                   |> aggregateWindow(every: 30s, fn: sum, createEmpty: false)
           - refId: B
-            relativeTimeRange: { from: 30, to: 0 }
+            relativeTimeRange: { from: 60, to: 0 }
             datasourceUid: pg-telemetry
             model:
               refId: B
@@ -47,7 +47,7 @@ groups:
               rawQuery: true
               rawSql: >-
                 SELECT now() AS time, count(*)::float8 AS uplink_rows
-                FROM uplinks WHERE received_at > now() - interval '30 seconds'
+                FROM uplinks WHERE received_at > now() - interval '60 seconds'
           - refId: C
             datasourceUid: __expr__
             model:

@@ -139,7 +139,10 @@ def run_otaa(gw: Gateway, interval: float) -> tuple[bool, list[str]]:
         gw.pump(0.5)
         for phy in gw.downlinks:
             if phy[:1] == bytes([otaa.MHDR_JOIN_ACCEPT]):
-                accept = otaa.parse_join_accept(phy, key)
+                try:
+                    accept = otaa.parse_join_accept(phy, key)
+                except otaa.OtaaError as exc:
+                    log.warning("JoinAccept for %s not valid: %s", scenario.OTAA_NAME, exc)
         gw.downlinks.clear()
     if accept is None:
         log.error("no JoinAccept for %s within 15 s", scenario.OTAA_NAME)
