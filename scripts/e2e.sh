@@ -38,6 +38,10 @@ influx_count() {
     | tr -d '\r' | awk -F, '!/^#/ && NF > 1 && $NF ~ /^[0-9]+$/ { print $NF }' | tail -n 1
 }
 
+# Predicates for wait_for: they query again on every retry.
+pg_full() { [ "$(pg_count)" = "$EXPECTED_UPLINKS" ]; }
+influx_full() { [ "$(influx_count)" = "$EXPECTED_UPLINKS" ]; }
+
 step "Fresh start"
 docker compose down -v --remove-orphans
 
@@ -50,14 +54,14 @@ docker compose run --rm -T provision
 step "Run the simulator scenario"
 sim_out=$(docker compose run --rm -T simulator 2>&1)
 echo "$sim_out" | tail -n 3
-grep -q "0 without PUSH_ACK" <<< "$sim_out" || fail "gateway bridge did not acknowledge every PUSH_DATA"
+grep -Eq ', 0 without PUSH_ACK' <<< "$sim_out" || fail "gateway bridge did not acknowledge every PUSH_DATA"
 
 step "Wait for $EXPECTED_UPLINKS rows in PostgreSQL uplinks"
-wait_for "uplinks rows" 90 test "$(pg_count)" = "$EXPECTED_UPLINKS"
+wait_for "uplinks rows" 90 pg_full
 echo "uplinks rows: $(pg_count)"
 
 step "Check InfluxDB points"
-wait_for "influx points" 60 test "$(influx_count)" = "$EXPECTED_UPLINKS"
+wait_for "influx points" 60 influx_full
 echo "influx points: $(influx_count)"
 
 step "Approval report"

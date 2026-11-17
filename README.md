@@ -169,6 +169,17 @@ CI (`.github/workflows/ci.yml`) has two jobs: `unit` (ruff and pytest) and `e2e`
 compose up, provisioning, scenario, row checks in PostgreSQL and InfluxDB, the three verdicts, and
 Grafana).
 
+## Known limitations
+
+This is a bench, not a production pipeline:
+
+- `ingest` subscribes with QoS 0 and a clean session. If a database write fails three times the
+  uplink is dropped, and the retry `sleep` runs on the MQTT network thread.
+- `provision` activates the ABP devices again on every run, which resets the uplink frame counter
+  in ChirpStack (harmless with `skip_fcnt_check`). Its list calls do not page past 100 items.
+- The end to end test exercises fCnt gaps and RSSI. Time gaps and battery drop are covered by the
+  unit tests only.
+
 ## License and credits
 
 MIT, see `LICENSE`. The ChirpStack, gateway bridge, Mosquitto, Redis and PostgreSQL configuration is
