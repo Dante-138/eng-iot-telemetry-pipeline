@@ -1,6 +1,6 @@
 # One image for the Python parts: ingest service, simulator, provisioning and
 # approval report. Pure logic lives in telemetry/.
-FROM python:3.12.16-slim
+FROM python:3.15.2-slim
 
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app
 WORKDIR /app
